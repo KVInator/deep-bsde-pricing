@@ -1243,4 +1243,14 @@ python -m bsde_pricing train-terminal --run-dir scratch/runs/vanilla_terminal_bs
 python -m unittest discover -s tests -v
 ```
 
-The neural notebook appends the saved-run configuration, parameter/cost table, selected/final initial prices, learning curves, terminal residuals and first three fresh propagated paths. Its extra descriptive evaluation uses 512 paths, seed 2027 and SeedSequence branch 3. It loads the saved checkpoints without fitting. MacBook verification of this new experiment remains pending.
+The neural notebook appends the saved-run configuration, parameter/cost table, selected/final initial prices, learning curves, terminal residuals and first three fresh propagated paths. Its extra descriptive evaluation uses 512 paths, seed 2027 and SeedSequence branch 3. It loads the saved checkpoints without fitting. MacBook verification is recorded below.
+
+### MacBook terminal-loss verification
+
+The ARM64 MacBook completes the same 3,000-update experiment in 12.71551 seconds of fitting and 0.03072 seconds of paired evaluation, using macOS 27.0.1, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 with CPU float64. Its supplied test log records all 77 tests passing in 2.532 seconds without warnings. The report retains 384,000 training paths, 4,817 parameters and the same validation-selected update, 2,800.
+
+The selected initial price is 9.4069423698, against 9.4134033839 analytically, giving signed error -0.0064610140. Selected discounted terminal RMSE remains 2.49502716, with residual mean 0.01404410 and standard error 0.05514542. The matched analytical-control RMSE is 2.03220071. Final-update price is 9.4565356798, with error +0.04313230 and discounted terminal RMSE 2.49221999. The maximum discrepancy across selected/final evaluation metrics and numerical training history, excluding elapsed times, is approximately 7.1e-15 between the MacBook and workspace. This is observed agreement for this one configuration and seed, not a general cross-platform reproducibility or timing claim.
+
+Review of [ada17ea](https://github.com/KVInator/deep-bsde-pricing/commit/ada17ea8e594b624b3bce25085aa436b94495c89) confirms an outputs-only notebook commit with unchanged source, 17 sequential code cells, 11 complete figures and no recorded error or stderr output. The first eight figures are preserved byte for byte; the three terminal-solver figures are reviewed in full. Selected/final checkpoint reload checks complete without error. The separate 512-path descriptive sample has discounted terminal RMSE 2.543842, mean residual -0.138158 with standard error 0.112367, and matched analytical-control RMSE 2.096407.
+
+The figures retain negative propagated values, terminal tail errors and differences from analytical conditional-value paths. The small initial-price error is confirmed, while accurate controls, recovered Greeks, seed robustness and a computational advantage remain unestablished. This completes verification of the first terminal-loss experiment without extending its budget or replacing its retained results.
