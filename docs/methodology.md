@@ -153,3 +153,62 @@ The base-case command produces:
 | Common gamma | 0.019333405840 |
 
 Reproduction: `python -m bsde_pricing reference --case vanilla`. These are analytical model values, not neural results or observations from a market.
+
+## Exact-terminal Monte Carlo
+
+The terminal distribution derived above permits direct sampling for a European payoff. `GBMModel.sample_terminal(initial_spots, horizon, n_paths, rng)` initially implements the one-asset law and returns shape $(N,1)$. Each stochastic terminal sample uses one independent standard normal draw. There is no forward time grid or Euler approximation. `MonteCarloPricer` calls that model method and the existing contract payoff; its estimator does not call the analytical pricing engine.
+
+For independent discounted payoff samples
+
+$$
+Y_i=e^{-r\tau}g(S_T^{(i)}),\qquad
+\widehat C_N=\frac1N\sum_{i=1}^N Y_i,
+$$
+
+the price estimate is unbiased under the specified exact model. Its variance is $\operatorname{Var}(Y)/N$. The reported sample variance and estimated standard error are
+
+$$
+s_Y^2=\frac{1}{N-1}\sum_{i=1}^N(Y_i-\widehat C_N)^2,
+\qquad \widehat{\mathrm{SE}}=\frac{s_Y}{\sqrt N}.
+$$
+
+The $N-1$ denominator makes the sample variance unbiased; it does not make the square-root standard deviation exactly unbiased. At least two samples are required. For a sufficiently informative IID sample, a central-limit normal approximation gives the nominal 95% interval
+
+$$
+\widehat C_N\pm\Phi^{-1}(0.975)\widehat{\mathrm{SE}}.
+$$
+
+The interval concerns repeated-simulation uncertainty under this model. It does not include uncertainty about model choice or calibrated inputs. Discounted call payoffs are not normally distributed, so the interval is an approximation. Its bounds are not clipped to enforce positive prices.
+
+### Randomness and degenerate samples
+
+The NumPy generator is passed explicitly. The CLI constructs it from the supplied seed and reports its bit-generator type. Reproducing a retained run also requires the environment and model configuration; a seed alone is not a guarantee of identical results across library changes or execution schemes. Pricing at expiry or with zero volatility consumes no random draws and returns the deterministic price with zero standard error.
+
+For a stochastic contract, zero observed sample variance does not establish zero true variance. In particular, no positive payoffs in a finite sample can hide a rare exercise event. The report retains `positive_payoff_count` and withholds confidence bounds (`null`) when the observed stochastic standard error is zero. A known deterministic payoff instead has a point interval. Low positive-payoff counts also warrant caution about the normal approximation; an interval being present does not certify its coverage.
+
+### Verification and interpretation
+
+The scalar distribution checks use
+
+$$
+\mathbb E[S_T]=S_0e^{(r-q)\tau},\qquad
+\operatorname{Var}(S_T)=S_0^2e^{2(r-q)\tau}(e^{\sigma^2\tau}-1),
+$$
+
+and the exact mean and variance of log returns. Fixed-seed checks use broad statistical tolerances for sampling variation, verify positive states and seeded repeatability, and test deterministic limits. Price comparisons use the independent Black-Scholes reference, including nonzero dividends and a negative-rate case. Standard-error scaling and repeated-seed dispersion are checked separately. No test requires every nominal 95% interval to contain the reference.
+
+Increasing sample count by four reduces standard error by approximately two, on average. A realised absolute error need not decrease monotonically for a chosen seed. The convergence statement is about estimator variance, not a guarantee for each successive estimate. The [Monte Carlo chapter of Pricing and Hedging Derivative Securities](https://book.derivative-securities.org/Chapter_MonteCarlo.html) develops this pricing and uncertainty framework.
+
+For the base case with 100,000 samples, seed 2026 and PCG64:
+
+| Quantity | Value |
+| --- | ---: |
+| Estimated call price | 9.389657214926 |
+| Estimated standard error | 0.044410690393 |
+| Approximate 95% lower bound | 9.302613861228 |
+| Approximate 95% upper bound | 9.476700568624 |
+| Analytical call price | 9.413403383853 |
+| Signed error / standard error | -0.534694883532 |
+| Positive payoffs | 52,137 |
+
+Reproduction: `python -m bsde_pricing monte-carlo --case vanilla --paths 100000 --seed 2026`. This is an introductory simulation check; its interval half-width is larger than the later reference-error budget. Stronger variance reduction is introduced before the high-dimensional reference study.

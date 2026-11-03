@@ -68,6 +68,42 @@ class GBMModel:
     def dimension(self) -> int:
         return len(self.volatilities)
 
+    def sample_terminal(
+        self, initial_spots: ArrayLike, horizon: float, n_paths: int,
+        rng: np.random.Generator,
+    ) -> NDArray[np.float64]:
+        """Draw exact terminal states of shape (n_paths, 1) for the scalar model."""
+        if self.dimension != 1:
+            raise NotImplementedError("Terminal sampling currently supports one asset.")
+        spots = _finite_vector(initial_spots, "initial_spots")
+        if len(spots) != 1 or spots[0] <= 0:
+            raise ValueError("initial_spots must contain one strictly positive spot.")
+        horizon = float(horizon)
+        if not math.isfinite(horizon) or horizon < 0:
+            raise ValueError("horizon must be finite and nonnegative.")
+        if (
+            isinstance(n_paths, (bool, np.bool_))
+            or not isinstance(n_paths, (int, np.integer)) or n_paths < 1
+        ):
+            raise ValueError("n_paths must be a positive integer.")
+        n_paths = int(n_paths)
+        if horizon == 0:
+            return np.full((n_paths, 1), spots[0], dtype=np.float64)
+
+        sigma = self.volatilities[0]
+        deviation = sigma * math.sqrt(horizon)
+        variance = deviation * deviation
+        drift = (self.rate - self.dividend_yields[0]) * horizon - 0.5 * variance
+        if not math.isfinite(variance) or not math.isfinite(drift):
+            raise ValueError("Integrated model parameters exceed floating-point range.")
+        if sigma > 0 and variance == 0:
+            raise ValueError("Integrated variance is below floating-point resolution.")
+        log_spots = np.full((n_paths, 1), math.log(spots[0]) + drift)
+        if sigma > 0:
+            log_spots += deviation * rng.standard_normal((n_paths, 1))
+        with np.errstate(over="raise", under="raise", invalid="raise"):
+            return np.exp(log_spots)
+
 
 @dataclass(frozen=True)
 class EuropeanCall:

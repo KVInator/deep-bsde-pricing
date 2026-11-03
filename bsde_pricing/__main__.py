@@ -22,7 +22,13 @@ def main() -> None:
         "reference", help="evaluate the analytical price and spot Greeks"
     )
     reference.add_argument("--case", choices=("vanilla",), default="vanilla")
-    for command in (environment, describe, reference):
+    monte_carlo = commands.add_parser(
+        "monte-carlo", help="estimate a price and its uncertainty from IID terminal states"
+    )
+    monte_carlo.add_argument("--case", choices=("vanilla",), default="vanilla")
+    monte_carlo.add_argument("--paths", type=int, default=100_000)
+    monte_carlo.add_argument("--seed", type=int, default=2026)
+    for command in (environment, describe, reference, monte_carlo):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -40,12 +46,38 @@ def main() -> None:
             else:
                 from .black_scholes import BlackScholesReference
 
-                result = BlackScholesReference(case.model, case.contract).evaluate(
+                reference_value = BlackScholesReference(case.model, case.contract).evaluate(
                     case.initial_spots[0]
                 )
+                if args.command == "reference":
+                    summary = {
+                        "method": "black_scholes", "case": case.name,
+                        **asdict(reference_value),
+                    }
+                else:
+                    import numpy as np
+
+                    from .monte_carlo import MonteCarloPricer
+
+                    rng = np.random.default_rng(args.seed)
+                    result = MonteCarloPricer(case.model, case.contract).estimate(
+                        case.initial_spots, n_paths=args.paths, rng=rng
+                    )
+                    error = result.price_estimate - reference_value.call_price
+                    summary = {
+                        "method": "exact_terminal_monte_carlo", "case": case.name,
+                        "seed": args.seed,
+                        "bit_generator": type(rng.bit_generator).__name__,
+                        **asdict(result),
+                        "reference_call_price": reference_value.call_price,
+                        "signed_error": error,
+                        "error_in_standard_errors": (
+                            error / result.standard_error
+                            if result.standard_error > 0 else None
+                        ),
+                    }
                 report = json.dumps(
-                    {"method": "black_scholes", "case": case.name, **asdict(result)},
-                    indent=2, sort_keys=True,
+                    summary, indent=2, sort_keys=True, allow_nan=False,
                 )
         if args.output is not None:
             args.output.parent.mkdir(parents=True, exist_ok=True)
