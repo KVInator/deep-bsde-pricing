@@ -707,3 +707,109 @@ python -m unittest discover -s tests -v
 ```
 
 The `correlated` case is the asymmetric arithmetic basket defined earlier. Reports include the financial problem, seed branch, allocations, uncertainty unit, pilot coefficients, missing-variance indices, plain/controlled results, available bounds and Sobol replication means. Unbiasedness statements refer to the ideal sampling model; finite-precision random-number generation and inverse-CDF transformation remain numerical approximations. The final reference remains numerical and carries its estimated uncertainty. Later learned-solver comparisons must preserve that distinction.
+
+## Pricing PDE and BSDE
+
+### Forward state and replication
+
+The same constant-parameter risk-neutral GBM model is used throughout. Let \(B\) have independent Brownian coordinates, and let \(\rho=LL^\top\) with the lower-triangular Cholesky factor \(L\). Define
+
+\[
+\mu_i(s)=(r-q_i)s_i,\qquad A(s)=\operatorname{diag}(s_i\sigma_i)L.
+\]
+
+Then \(dS_t=\mu(S_t)dt+A(S_t)dB_t\). Asset rows and Brownian columns of \(A\) have distinct meanings. In particular,
+
+\[
+(AA^\top)_{ij}=s_i s_j\sigma_i\sigma_j\rho_{ij}.
+\]
+
+For a self-financing portfolio with value \(X\), holdings \(\Delta_i\) in dividend-paying assets and the balance in a bank account,
+
+\[
+dX=\sum_i\Delta_i(dS_i+q_iS_i\,dt)
+  +r\left(X-\sum_i\Delta_iS_i\right)dt
+  =rX\,dt+\Delta^\top A\,dB.
+\]
+
+This identity includes reinvested continuous dividends. The assumptions are frictionless trading, continuous rebalancing, one constant borrowing/lending rate, no transaction costs or default, and the existing European terminal payoff \(g\). Stochastic rates, funding asymmetry and early exercise are outside this model. Strictly positive volatilities and positive-definite correlation give a complete diffusion market; zero-volatility limits remain valid pricing cases but do not identify unique holdings in deterministic assets.
+
+### Itô's formula and the driver sign
+
+For \(Y_t=V(t,S_t)\), Itô's formula gives
+
+\[
+dY_t=\left[V_t+\mu\cdot\nabla V
+  +\tfrac12\operatorname{tr}(AA^\top D^2V)\right]dt
+  +(A^\top\nabla V)^\top dB_t.
+\]
+
+Matching replication with \(\Delta=\nabla V\) yields the pricing PDE
+
+\[
+V_t+\sum_i(r-q_i)s_iV_{s_i}
+ +\tfrac12\sum_{i,j}\rho_{ij}\sigma_i\sigma_j s_i s_j V_{s_i s_j}
+ -rV=0,\qquad V(T,s)=g(s).
+\]
+
+The BSDE convention is
+
+\[
+dY_t=-f(Y_t)dt+Z_t^\top dB_t,\qquad
+f(y)=-ry,\qquad Z_t=A(S_t)^\top\nabla V(t,S_t).
+\]
+
+Consequently the forward value drift is **\(+rY\)**. The equivalent backward integral is
+
+\[
+Y_t=g(S_T)+\int_t^T f(Y_u)du-\int_t^T Z_u^\top dB_u.
+\]
+
+Dividends enter the state drift, not the discount driver. A forward Euler value step therefore reads \(Y_{n+1}\approx(1+r\Delta t)Y_n+Z_n^\top\Delta B_n\). Confusing the minus sign before \(f\) with the sign of \(f\) itself reverses discounting. This convention matches the semilinear PDE/BSDE formulation in [Han, Jentzen and E (2018), equations 1-5 and 18](https://pmc.ncbi.nlm.nih.gov/articles/PMC6112690/); the present driver is its linear pricing specialisation.
+
+The call payoff is not differentiable at its exercise boundary. The classical derivation applies before maturity where the nondegenerate diffusion smooths the price, with the terminal condition understood by continuity. Terminal deltas at the payoff kink are not needed by the diagnostic.
+
+### Spot delta and Brownian control
+
+Write \(h_i=s_i\sigma_i\Delta_i\). With correlated Brownian motion \(W=LB\), the martingale term is \(h^\top dW\). With independent coordinates \(B\), it is \(Z^\top dB\), where
+
+\[
+Z=L^\top h.
+\]
+
+For NumPy row batches, shocks are transformed as `normals @ L.T`, while controls are transformed as `(deltas * spots * volatilities) @ L`. These transposes differ because a control pairs with a Brownian increment in an inner product. A hand-worked two-asset example in the tests distinguishes them. Independent Brownian coordinates are the convention for the BSDE contract.
+
+In one dimension, \(Z=\sigma S\Delta\). For the vanilla base case, \(\Delta_0=0.5987063257\), but \(Z_0=11.9741265137\). Delta measures currency per unit of asset price; \(Z\) measures currency per square-root year. Where all \(s_i\sigma_i>0\), deltas can be recovered by solving \(L^\top h=Z\), then dividing by \(s_i\sigma_i\). Zero-volatility directions prevent that inversion.
+
+`PricingBSDE` composes the existing model and payoff. It provides the drift, diffusion, driver, delta-to-control map and terminal condition. State and delta arrays have shape `(..., d)`, controls retain that shape, and diffusion arrays have shape `(..., d, d)`. Inputs are validated and not mutated. This NumPy contract fixes the financial conventions; framework-specific automatic differentiation is a separate implementation step.
+
+### Discounted analytical-control diagnostic
+
+Discounting removes the pricing driver:
+
+\[
+d(e^{-rt}Y_t)=e^{-rt}Z_t^\top dB_t,\qquad
+V(0,S_0)=\mathbb E[e^{-rT}g(S_T)].
+\]
+
+For a uniform grid with \(m\) intervals, the diagnostic computes each path's residual
+
+\[
+\varepsilon_m=e^{-rT}g(S_T)-V(0,S_0)
+ -\sum_{n=0}^{m-1}e^{-rt_n}Z(t_n,S_{t_n})^\top\Delta B_n.
+\]
+
+`AnalyticalBSDEDiagnostic` uses the already checked one-asset Black-Scholes value and delta. `BlackScholesReference.call_delta_array` evaluates batches before expiry; it shares the scalar normal-argument calculation and is checked against scalar deltas and independent price bumps. Positive maturity and volatility are required by this diagnostic.
+
+The finest-grid increments are generated once. Coarser increments sum consecutive fine increments, so every grid follows the same Brownian paths and uses the same terminal payoff. At each left endpoint, the shared GBM transition evaluates the state exactly from the Brownian value at that time. Thus there is no Euler state bias in this experiment. The remaining approximation is the left-endpoint stochastic integral. The control never uses its current or a future increment.
+
+Under the ideal sampling model, each adapted integral sum has zero expectation, so the residual mean is zero at every grid size. Its estimated standard error is the across-path sample standard deviation divided by \(\sqrt N\). The root mean square, \(\sqrt{N^{-1}\sum_k\varepsilon_{m,k}^2}\), measures the typical pathwise discretisation error. It need not vanish on a finite grid even with an exact analytical solution. Approximately square-root timestep behaviour is an empirical comparison guide, not a fitted convergence theorem for the nonsmooth terminal payoff. Grid estimates are dependent because the paths are coupled; six pointwise intervals do not establish coverage or six independent tests.
+
+```bash
+python -m bsde_pricing bsde-diagnostic --case vanilla --paths 8192 --seed 2026 --output scratch/vanilla_bsde.json
+python -m unittest discover -s tests -v
+```
+
+The default grid sizes are 8, 16, 32, 64, 128 and 256. The largest must be divisible by every smaller size; `--steps` accepts a different increasing nested set. Memory scales as \(N m_{\max}\), with about 16 MiB for the default finest Brownian array, plus working arrays. Reports retain the problem, seed, generator, grid settings, residual means, standard errors and RMS values. Notebook sections 11-12 expose the path allocation and grid choices alongside the existing editable financial inputs.
+
+For 8,192 paths and seed 2026, the base-case RMS falls from **2.791483** at eight intervals to **0.512118** at 256. The final mean is **-0.00276424**, with standard error **0.00565842**. Every grid's mean lies within one estimated standard error of zero in this run. These are analytical-control discretisation results, not neural training results or a demonstrated pricing speedup. Tests also cover negative rates, dividends, a shorter maturity and higher volatility. Local BSDE loss construction, PyTorch derivatives and learned controls are developed separately.

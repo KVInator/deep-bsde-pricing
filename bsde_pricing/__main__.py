@@ -134,6 +134,21 @@ def _basket_reference_summary(args: argparse.Namespace, case: "PricingCase") -> 
     return {"case": case.name, "problem": json.loads(case.to_json()), **asdict(result)}
 
 
+def _bsde_diagnostic_summary(args: argparse.Namespace, case: "PricingCase") -> dict[str, object]:
+    import numpy as np
+
+    from .bsde import AnalyticalBSDEDiagnostic, PricingBSDE
+
+    result = AnalyticalBSDEDiagnostic(PricingBSDE(case.model, case.contract)).run(
+        case.initial_spots[0], n_paths=args.paths, rng=np.random.default_rng(args.seed),
+        steps=tuple(args.steps),
+    )
+    return {
+        "method": "discounted_analytical_bsde_refinement", "case": case.name,
+        "problem": json.loads(case.to_json()), "seed": args.seed, **asdict(result),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m bsde_pricing")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -182,7 +197,15 @@ def main() -> None:
     basket_reference.add_argument("--scrambles", type=int, default=16)
     basket_reference.add_argument("--pilot-pairs", type=int, default=4096)
     basket_reference.add_argument("--seed", type=int, default=2026)
-    for command in (environment, describe, reference, monte_carlo, finite_difference, sample, basket_reference):
+    bsde_diagnostic = commands.add_parser(
+        "bsde-diagnostic", help="check the analytical discounted BSDE under time refinement",
+    )
+    bsde_diagnostic.add_argument("--case", choices=("vanilla",), default="vanilla")
+    bsde_diagnostic.add_argument("--paths", type=int, default=8192)
+    bsde_diagnostic.add_argument("--seed", type=int, default=2026)
+    bsde_diagnostic.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64, 128, 256))
+    for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
+                    basket_reference, bsde_diagnostic):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -203,6 +226,8 @@ def main() -> None:
                     summary = _sampling_summary(args, case)
                 elif args.command == "basket-reference":
                     summary = _basket_reference_summary(args, case)
+                elif args.command == "bsde-diagnostic":
+                    summary = _bsde_diagnostic_summary(args, case)
                 else:
                     from .black_scholes import BlackScholesReference
                     from .geometric_basket import GeometricBasketReference

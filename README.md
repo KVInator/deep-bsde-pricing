@@ -2,7 +2,7 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, correlated multi-asset terminal sampling with moment diagnostics, an exact geometric-basket price and coordinate-delta reference, and arithmetic-basket references with geometric controls and scrambled Sobol sampling. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
+The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, correlated multi-asset terminal sampling with moment diagnostics, an exact geometric-basket price and coordinate-delta reference, arithmetic-basket references with geometric controls and scrambled Sobol sampling, and an analytical BSDE time-refinement diagnostic. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
 
 ## Environment
 
@@ -115,6 +115,16 @@ The reference estimates the asymmetric arithmetic call price and all coordinate 
 For seed 2027, the controlled price estimates are **13.35403144** (antithetic SE **0.00229101**) and **13.35667441** (Sobol SE **0.00028312**). Both confirmation methods meet the notebook's approximate 95% half-width targets of 0.005 price units and 0.0005 per delta. These are numerical estimates with sampling uncertainty. The [methodology](docs/methodology.md#arithmetic-basket-numerical-reference) records the initial under-resolved run, independent confirmation, estimator formulas, bounds and computing limits.
 
 Basket-notebook sections 11-14 retain matched-work comparisons, independent confirmation, sample-allocation/seed variation and complete-call timings. Runtime measurements apply to the execution environment recorded in the notebook.
+
+## PDE and BSDE conventions
+
+```bash
+python -m bsde_pricing bsde-diagnostic --case vanilla --paths 8192 --seed 2026 --output scratch/vanilla_bsde.json
+```
+
+The pricing BSDE uses independent Brownian coordinates, driver `f(Y) = -rY`, forward drift `+rY`, and control `Z = A.T @ delta`, where `A = diag(spots * volatilities) @ L` and `L @ L.T` is correlation. The [derivation](docs/methodology.md#pricing-pde-and-bsde) connects self-financing replication, the pricing PDE and discounted martingales.
+
+The diagnostic substitutes analytical vanilla deltas into the discounted BSDE on shared paths across nested time grids. GBM states are exact at grid points. With 8,192 paths and seed 2026, residual RMS falls from **2.791483** at eight intervals to **0.512118** at 256. The final residual mean is **-0.00276424**, with standard error **0.00565842**. Classical-notebook sections 11-12 show the control and refinement plots. These quantify stochastic-integral discretisation before neural training.
 
 ## Notebook exploration
 

@@ -3,11 +3,24 @@
 import math
 from dataclasses import dataclass
 
-from .problems import EuropeanCall, GBMModel
+import numpy as np
+from numpy.typing import ArrayLike, NDArray
+from scipy.special import ndtr
+
+from .problems import EuropeanCall, GBMModel, _finite_array
 
 
 def _normal_cdf(value: float) -> float:
     return 0.5 * math.erfc(-value / math.sqrt(2.0))
+
+
+def _normal_arguments(
+    log_spot: float | NDArray[np.float64], strike: float, rate: float,
+    dividend: float, tau: float, deviation: float,
+) -> tuple[float | NDArray[np.float64], float | NDArray[np.float64]]:
+    log_forward_moneyness = log_spot - math.log(strike) + (rate - dividend) * tau
+    d1 = log_forward_moneyness / deviation + 0.5 * deviation
+    return d1, d1 - deviation
 
 
 @dataclass(frozen=True)
@@ -30,6 +43,34 @@ class BlackScholesReference:
     def __post_init__(self) -> None:
         if self.model.dimension != 1 or self.contract.weights != (1.0,):
             raise ValueError("Black-Scholes reference requires one asset and unit weight.")
+
+    def call_delta_array(self, spots: ArrayLike, time: float = 0.0) -> NDArray[np.float64]:
+        """Evaluate delta at one time, retaining the input array's shape.
+
+        Path diagnostics use this vectorised form before expiry with positive
+        volatility. Deterministic limits and kinks remain in evaluate().
+        """
+        spots = _finite_array(spots, "spots")
+        time = float(time)
+        if spots.size == 0 or np.any(spots <= 0):
+            raise ValueError("spots must be nonempty and strictly positive.")
+        if not math.isfinite(time) or not 0 <= time < self.contract.maturity:
+            raise ValueError("Array deltas require a time strictly before maturity.")
+        tau = self.contract.maturity - time
+        sigma = self.model.volatilities[0]
+        deviation = sigma * math.sqrt(tau)
+        if not math.isfinite(deviation) or deviation == 0:
+            raise ValueError("Array deltas require positive finite integrated volatility.")
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            d1, _ = _normal_arguments(
+                np.log(spots), self.contract.strike, self.model.rate,
+                self.model.dividend_yields[0], tau, deviation,
+            )
+            discount_q = math.exp(-self.model.dividend_yields[0] * tau)
+            deltas = np.asarray(discount_q * ndtr(d1), dtype=np.float64)
+        if discount_q == 0 or not np.isfinite(deltas).all():
+            raise ArithmeticError("Array deltas exceeded the supported numerical range.")
+        return deltas
 
     def evaluate(self, spot: float, time: float = 0.0) -> BlackScholesResult:
         spot, time = float(spot), float(time)
@@ -80,11 +121,9 @@ class BlackScholesReference:
         deviation = sigma * math.sqrt(tau)
         if not math.isfinite(deviation) or deviation == 0:
             raise ValueError("Integrated volatility is outside the supported numerical range.")
-        log_forward_moneyness = (
-            math.log(spot) - math.log(strike) + (rate - dividend) * tau
+        d1, d2 = _normal_arguments(
+            math.log(spot), strike, rate, dividend, tau, deviation,
         )
-        d1 = log_forward_moneyness / deviation + 0.5 * deviation
-        d2 = d1 - deviation
         call_price = math.fsum(
             (discounted_spot * _normal_cdf(d1),
              -discounted_strike * _normal_cdf(d2))
