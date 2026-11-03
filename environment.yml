@@ -3,11 +3,11 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.12
+  - python=3.12.16
   - pip
   - pip:
-      - numpy
-      - scipy
-      - matplotlib
-      - pytest
-      - torch
+      - numpy==2.5.4
+      - scipy==1.18.1
+      - matplotlib==3.11.2
+      - pytest==9.2.0
+      - torch==2.15.0
