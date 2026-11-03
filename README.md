@@ -66,3 +66,16 @@ python -m bsde_pricing monte-carlo --quantity delta --case vanilla --paths 10000
 The delta command compares a pathwise estimator with a central spot bump using common random numbers. Both reuse the exact terminal sampler. It reports uncertainty for each estimate and for their paired difference. The default bump is 0.1% of initial spot.
 
 For the same sample count and seed, pathwise delta is **0.59985776** with standard error **0.00184923**. The central-bump estimate is **0.59987416**; analytical delta is **0.59870633**. The methodology separates sampling error, finite-bump bias and rounding effects. Deterministic exercise kinks are rejected as undefined derivatives.
+
+## Notebook exploration
+
+Open [Classical references](notebooks/01_classical_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.
+
+For an existing environment, install and register the notebook kernel:
+
+```bash
+python -m pip install "ipykernel==7.4.0"
+python -m ipykernel install --user --name bsde-pricing --display-name "Python (bsde-pricing)"
+```
+
+Editable inputs control spot, strike, volatility, maturity, rates, dividends and simulation settings. The notebook provides price/Greek curves, Monte Carlo error bars and tables, sample-count/seed studies, and paired bump diagnostics. Its numerical calculations use the package classes. Retained outputs show the default configuration; rerun all cells after editing inputs.

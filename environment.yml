@@ -11,3 +11,4 @@ dependencies:
       - matplotlib==3.11.2
       - pytest==9.2.0
       - torch==2.15.0
+      - ipykernel==7.4.0
