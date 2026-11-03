@@ -59,6 +59,34 @@ def _monte_carlo_summary(
     return summary
 
 
+def _finite_difference_summary(
+    args: argparse.Namespace, case: "PricingCase", reference_value: "BlackScholesResult",
+) -> dict[str, object]:
+    from .finite_difference import FiniteDifferencePricer
+
+    result = FiniteDifferencePricer(case.model, case.contract).solve(
+        s_max=args.s_max, n_space=args.space_steps, n_time=args.time_steps,
+        rannacher_steps=args.rannacher_steps,
+    )
+    value = result.evaluate(case.initial_spots[0])
+    return {
+        "case": case.name,
+        "method": "crank_nicolson_rannacher" if args.rannacher_steps else "crank_nicolson",
+        **asdict(value),
+        "s_max": args.s_max, "space_steps": args.space_steps,
+        "time_steps": args.time_steps, "rannacher_steps": args.rannacher_steps,
+        "spot_spacing": float(result.spots[1]),
+        "time_spacing": result.time_to_maturity / result.n_time,
+        "upwind_node_count": result.upwind_node_count,
+        "reference_call_price": reference_value.call_price,
+        "reference_call_delta": reference_value.call_delta,
+        "reference_gamma": reference_value.gamma,
+        "price_signed_error": value.call_price - reference_value.call_price,
+        "delta_signed_error": value.call_delta - reference_value.call_delta,
+        "gamma_signed_error": value.gamma - reference_value.gamma,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m bsde_pricing")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -84,7 +112,15 @@ def main() -> None:
         "--bump-fraction", type=float, default=0.001,
         help="relative spot bump used by the delta comparison",
     )
-    for command in (environment, describe, reference, monte_carlo):
+    finite_difference = commands.add_parser(
+        "finite-difference", help="solve the scalar call PDE and compare price and Greeks"
+    )
+    finite_difference.add_argument("--case", choices=("vanilla",), default="vanilla")
+    finite_difference.add_argument("--s-max", type=float, default=400.0)
+    finite_difference.add_argument("--space-steps", type=int, default=400)
+    finite_difference.add_argument("--time-steps", type=int, default=400)
+    finite_difference.add_argument("--rannacher-steps", type=int, default=2)
+    for command in (environment, describe, reference, monte_carlo, finite_difference):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -110,8 +146,10 @@ def main() -> None:
                         "method": "black_scholes", "case": case.name,
                         **asdict(reference_value),
                     }
-                else:
+                elif args.command == "monte-carlo":
                     summary = _monte_carlo_summary(args, case, reference_value)
+                else:
+                    summary = _finite_difference_summary(args, case, reference_value)
                 report = json.dumps(
                     summary, indent=2, sort_keys=True, allow_nan=False,
                 )

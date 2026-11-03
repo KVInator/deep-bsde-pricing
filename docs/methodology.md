@@ -267,3 +267,147 @@ For 100,000 samples, seed 2026 and relative bump 0.001 ($h=0.1$):
 | Analytical delta | 0.598706325683 | Not applicable |
 
 There are 424 bump-crossing paths in this run. Reproduction: `python -m bsde_pricing monte-carlo --quantity delta --case vanilla --paths 100000 --seed 2026`.
+
+## Finite-difference reference
+
+### From risk-neutral dynamics to the PDE
+
+For one asset with constant parameters,
+
+$$
+dS_t=(r-q)S_t\,dt+\sigma S_t\,dW_t,
+\qquad V(S,T)=(S-K)^+.
+$$
+
+Itô's formula gives
+
+$$
+dV=\left(V_t+(r-q)SV_S+\tfrac12\sigma^2S^2V_{SS}\right)dt
++\sigma SV_S\,dW_t.
+$$
+
+Under the risk-neutral pricing assumptions, the discounted derivative value is a martingale. Setting the drift of $e^{-rt}V$ to zero gives
+
+$$
+V_t+\tfrac12\sigma^2S^2V_{SS}+(r-q)SV_S-rV=0.
+$$
+
+The four terms represent calendar-time change, diffusion curvature, risk-neutral spot drift and discounting. With remaining time $\tau=T-t$ and $u(S,\tau)=V(S,T-\tau)$, the sign of the time derivative changes:
+
+$$
+u_\tau=\mathcal L u,
+\qquad
+\mathcal L=\tfrac12\sigma^2S^2\partial_{SS}+(r-q)S\partial_S-r,
+\qquad u(S,0)=(S-K)^+.
+$$
+
+The numerical calculation therefore starts at the known terminal payoff and marches forward in remaining time to the requested valuation time. It approximates a whole spot slice, rather than following simulated paths. The model and payoff assumptions are identical to the analytical and Monte Carlo references.
+
+### Finite domain and boundary conditions
+
+The spot grid covers $[0,S_{\max}]$. At zero, GBM remains zero and a positive-strike call is worthless, so
+
+$$u(0,\tau)=0.$$
+
+At the upper boundary, the solver imposes the discounted linear asymptote
+
+$$
+u(S_{\max},\tau)\approx B(\tau)
+=S_{\max}e^{-q\tau}-Ke^{-r\tau}.
+$$
+
+This condition is exact only asymptotically. Put–call parity identifies the omitted term as the residual put value at that boundary. A positive boundary gap alone does not establish that $S_{\max}$ is sufficiently far away. The notebook enlarges the domain while holding spot spacing and time resolution fixed. Enlarging the domain at fixed node count would coarsen the mesh and mix boundary and discretisation effects.
+
+Discount factors and boundary values must remain representable. The upper gap must be positive throughout the horizon; its sign is controlled by a monotone exponential ratio, so the endpoint conditions suffice. Invalid boundary inputs raise an error. No analytical price, normal CDF or analytical Greek is used inside the PDE solver.
+
+### Spot differences and matrix coefficients
+
+Let $M$ count spot intervals, $\Delta S=S_{\max}/M$, and $S_i=i\Delta S$. There are $M+1$ price nodes and $M-1$ interior unknowns. Central differences are
+
+$$
+u_S(S_i)\approx\frac{u_{i+1}-u_{i-1}}{2\Delta S},
+\qquad
+u_{SS}(S_i)\approx\frac{u_{i+1}-2u_i+u_{i-1}}{\Delta S^2}.
+$$
+
+The interior operator becomes
+
+$$
+(\mathcal L_h u)_i=a_i u_{i-1}+b_i u_i+c_i u_{i+1},
+$$
+
+with
+
+$$
+a_i=\tfrac12\sigma^2 i^2-\tfrac12(r-q)i,
+\quad c_i=\tfrac12\sigma^2 i^2+\tfrac12(r-q)i,
+\quad b_i=-a_i-c_i-r.
+$$
+
+When convection dominates diffusion near zero, a centered off-diagonal coefficient can be negative. On those rows only, the solver uses a forward derivative for positive $r-q$ or a backward derivative for negative $r-q$. Writing $d_i=\tfrac12\sigma^2i^2$ and $m_i=(r-q)i$, the replacement is
+
+$$
+a_i=d_i+\max(-m_i,0),\qquad
+c_i=d_i+\max(m_i,0),\qquad b_i=-a_i-c_i-r.
+$$
+
+These one-sided rows have first-order local spatial accuracy. `upwind_node_count` exposes their use; the default model has none. Nonnegative spatial off-diagonals do not make Crank–Nicolson unconditionally positivity preserving in time. Values and Greeks are retained without clipping so instability remains visible.
+
+### Time stepping and Rannacher startup
+
+Let $\mathbf v$ contain the interior prices, $A$ the tridiagonal interior operator and $\mathbf g(\tau)$ the boundary source. Only the last source entry is nonzero: $g_{M-1}=c_{M-1}B(\tau)$. For a step of length $h$,
+
+$$
+(I-\theta hA)\mathbf v^{n+1}
+=(I+(1-\theta)hA)\mathbf v^n
++h\left[(1-\theta)\mathbf g(\tau_n)
++\theta\mathbf g(\tau_{n+1})\right].
+$$
+
+Crank–Nicolson uses $\theta=1/2$; backward Euler uses $\theta=1$. The default replaces the first **two full time intervals** with **four backward-Euler half steps**, then resumes Crank–Nicolson. `rannacher_steps` counts replaced full intervals. Setting it to zero runs plain Crank–Nicolson for comparison; setting it to the full interval count uses backward-Euler half steps throughout.
+
+The call payoff is continuous but its slope jumps at the strike. Plain Crank–Nicolson can leave high-frequency errors from that kink, particularly in gamma. Implicit startup damps these modes. This is a numerical treatment of terminal regularity, not a change to the payoff or financial model. See Giles and Carter, [Convergence analysis of Crank–Nicolson and Rannacher time-marching](https://people.maths.ox.ac.uk/gilesm/files/giles_carter.pdf), and Pooley, Vetzal and Forsyth, [Convergence remedies for non-smooth payoffs in option pricing](https://cs.uwaterloo.ca/~paforsyt/report.pdf).
+
+Each step solves a tridiagonal system through SciPy's `solve_banded`, using three diagonal rows rather than a dense matrix. With $N$ full time intervals and $R$ startup intervals, there are $N+R$ linear solves. Work is $O(M(N+R))$ and working storage is $O(M)$; the implementation retains only the final spot slice. Rates may be negative. A conservative check requires $1+r\Delta\tau>0$ to retain diagonal dominance of the implicit matrices under negative discount rates; smaller time steps resolve a rejected configuration.
+
+### Price and Greek evaluation
+
+`FiniteDifferencePricer(model, contract).solve()` returns a `FiniteDifferenceResult`. Its read-only price and spot arrays have shape `(M+1,)`; central-difference delta and gamma arrays have shape `(M-1,)` and correspond to `spots[1:-1]`.
+
+At the final time slice,
+
+$$
+\Delta_i=\frac{u_{i+1}-u_{i-1}}{2\Delta S},
+\qquad
+\Gamma_i=\frac{u_{i+1}-2u_i+u_{i-1}}{\Delta S^2}.
+$$
+
+`result.evaluate(spot)` linearly interpolates prices and these nodal Greeks separately. Differentiating a piecewise-linear price interpolant would instead give a piecewise-constant delta and zero gamma between knots. The reported Greek interpolation is an approximation to the PDE derivative, not the literal derivative of the reported price interpolant. Evaluation is restricted to the first through last interior nodes; no boundary Greek extrapolation is supplied.
+
+The solver supports a single asset, unit payoff weight, positive volatility and a valuation time strictly before expiry. Zero-volatility and expiry cases remain available through the separate analytical reference; the PDE interface rejects them rather than returning analytical results as numerical solutions.
+
+### Convergence evidence and reproduction
+
+The checks separate the following errors:
+
+| Source | Experiment |
+| --- | --- |
+| Spot discretisation | Double spot intervals at fixed domain and fine time resolution. |
+| Time discretisation | Refine time on one spot grid; compare with a fine-time solution on that same grid. |
+| Terminal kink | Compare plain and smoothed Crank–Nicolson, including nodal gamma. |
+| Upper boundary | Increase $S_{\max}$ at fixed $\Delta S$ and time resolution. |
+| Interpolation | Compare an off-grid valuation with the analytical price and Greeks. |
+
+With $S_{\max}=400$, $M=N=400$, and two Rannacher intervals, the base-case PDE price is **9.410950068925**, delta **0.598652232851**, and gamma **0.019340230898**. Their signed errors against Black–Scholes are approximately **−0.002453314928**, **−0.000054092832**, and **0.000006825058**. These are deterministic numerical errors, not standard errors or confidence intervals. Doubling both grids to 800 gives price **9.412790265519** and price error **−0.000613118334**.
+
+Aligned spatial refinements with 100, 200 and 400 intervals and 2,048 time intervals show approximately factor-four error reductions for price, delta and gamma. Separate time checks compare 8, 16 and 32 time intervals with a 4,096-interval solution on the same 800-interval spot grid. Boundary checks include an intentionally inadequate upper spot of 120, whose base-case price error exceeds 0.1. Other tests cover dividends, negative rates, convection-dominated rows, evaluation time and invalid grids. On an 800-interval spot grid and 800 time intervals, tested prices, deltas and gammas at spots 80, 100 and 120 have absolute budgets of 0.002, 0.0001 and 0.00002 respectively. These budgets describe those checks, not a uniform error bound over all supported inputs.
+
+The spatial accuracy evidence is specific to a smooth positive-time solution, an aligned strike, interior evaluations and a sufficiently distant boundary. Strike alignment, interpolation, locally one-sided rows and unresolved time or boundary error can change observed rates. Long maturities and high volatility require renewed domain and grid checks.
+
+```bash
+python -m bsde_pricing finite-difference --case vanilla --output scratch/vanilla_pde.json
+python -m bsde_pricing finite-difference --case vanilla --space-steps 800 --time-steps 800
+python -m unittest discover -s tests -v
+```
+
+The classical-reference notebook retains the plots and tables for these studies and runs them using the same core classes.

@@ -2,7 +2,7 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The current implementation provides validated financial problems, a single-asset Black-Scholes reference, and exact-terminal Monte Carlo prices and deltas with sampling uncertainty. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
+The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, and a one-dimensional finite-difference PDE reference. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
 
 ## Environment
 
@@ -67,6 +67,17 @@ The delta command compares a pathwise estimator with a central spot bump using c
 
 For the same sample count and seed, pathwise delta is **0.59985776** with standard error **0.00184923**. The central-bump estimate is **0.59987416**; analytical delta is **0.59870633**. The methodology separates sampling error, finite-bump bias and rounding effects. Deterministic exercise kinks are rejected as undefined derivatives.
 
+## Finite-difference reference
+
+```bash
+python -m bsde_pricing finite-difference --case vanilla --output scratch/vanilla_pde.json
+python -m bsde_pricing finite-difference --case vanilla --space-steps 800 --time-steps 800
+```
+
+The scalar call solver uses a uniform spot grid, Crank–Nicolson and four backward-Euler half steps across the first two time intervals. Delta and gamma come from the numerical price grid. The analytical reference enters only the comparison report. The default upper spot boundary is 400; both grids have 400 intervals.
+
+For the base case, the PDE price is **9.41095007**, delta **0.59865223**, and gamma **0.01934023**. The price error is **−0.00245331**; doubling both grids to 800 reduces it to **−0.00061312**. The notebook separates spot, time and upper-boundary refinement and shows the gamma oscillations produced by plain Crank–Nicolson on a coarse time grid. Full equations, scope and error checks are in the [methodology](docs/methodology.md#finite-difference-reference).
+
 ## Notebook exploration
 
 Open [Classical references](notebooks/01_classical_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.
@@ -78,4 +89,4 @@ python -m pip install "ipykernel==7.4.0"
 python -m ipykernel install --user --name bsde-pricing --display-name "Python (bsde-pricing)"
 ```
 
-Editable inputs control spot, strike, volatility, maturity, rates, dividends and simulation settings. The notebook provides price/Greek curves, Monte Carlo error bars and tables, sample-count/seed studies, and paired bump diagnostics. Its numerical calculations use the package classes. Retained outputs show the default configuration; rerun all cells after editing inputs.
+Editable inputs control spot, strike, volatility, maturity, rates, dividends and simulation settings. The notebook provides price/Greek curves, Monte Carlo error bars and tables, sample-count/seed studies, paired bump diagnostics, and PDE price/Greek comparisons with grid and boundary studies. Its numerical calculations use the package classes. Retained outputs show the default configuration; rerun all cells after editing inputs.
