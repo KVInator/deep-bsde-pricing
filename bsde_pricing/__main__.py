@@ -204,8 +204,12 @@ def main() -> None:
     bsde_diagnostic.add_argument("--paths", type=int, default=8192)
     bsde_diagnostic.add_argument("--seed", type=int, default=2026)
     bsde_diagnostic.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64, 128, 256))
+    autograd = commands.add_parser("autograd", help="check physical derivatives and CPU/MPS workloads")
+    autograd.add_argument("--backend", choices=("auto", "cpu", "mps"), default="auto")
+    autograd.add_argument("--batch-size", type=int, default=256)
+    autograd.add_argument("--repeats", type=int, default=5)
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
-                    basket_reference, bsde_diagnostic):
+                    basket_reference, bsde_diagnostic, autograd):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -214,6 +218,13 @@ def main() -> None:
     try:
         if args.command == "environment":
             report = EnvironmentReport.capture().to_json()
+        elif args.command == "autograd":
+            from .autograd_diagnostics import run_autograd_diagnostics
+
+            summary = run_autograd_diagnostics(
+                backend=args.backend, batch_size=args.batch_size, repeats=args.repeats,
+            )
+            report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
         else:
             from .problems import correlated_case, geometric_case, vanilla_case
 
@@ -256,6 +267,8 @@ def main() -> None:
     except (OSError, RuntimeError, ValueError, ArithmeticError) as exc:
         parser.exit(1, f"{args.command.capitalize()} failed: {exc}\n")
     print(report)
+    if args.command == "autograd" and not summary["passed"]:
+        parser.exit(1, "Autograd checks failed; inspect the backend results above.\n")
 
 
 if __name__ == "__main__":

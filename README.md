@@ -126,6 +126,16 @@ The pricing BSDE uses independent Brownian coordinates, driver `f(Y) = -rY`, for
 
 The diagnostic substitutes analytical vanilla deltas into the discounted BSDE on shared paths across nested time grids. GBM states are exact at grid points. With 8,192 paths and seed 2026, residual RMS falls from **2.791483** at eight intervals to **0.512118** at 256. The final residual mean is **-0.00276424**, with standard error **0.00565842**. Classical-notebook sections 11-12 show the control and refinement plots. These quantify stochastic-integral discretisation before neural training.
 
+## Automatic derivatives and backend checks
+
+```bash
+python -m bsde_pricing autograd --output scratch/autograd.json
+```
+
+The command checks time derivatives, spot deltas and Hessians against scaled polynomials and the analytical vanilla reference. A small two-hidden-layer tanh network then exercises value/gradient/Hessian evaluation and backpropagation to its weights. CPU float64 is the reference; CPU float32 and available MPS float32 use the same weights and inputs. Reports retain errors, tolerances, backend failures, warmup settings and repeated synchronized workload times. No pricing network is trained by this command.
+
+The [derivative specification](docs/methodology.md#automatic-derivatives-and-backend-checks) explains physical-unit scaling, graph ownership, the independent checks and timing scope. MPS availability alone does not establish derivative support or a speed advantage. Use `--backend cpu` for a CPU-only report or `--backend mps` to require an MPS trial. The neural-results notebook begins with the first trained solver.
+
 ## Notebook exploration
 
 Open [Classical references](notebooks/01_classical_references.ipynb) or [Basket references](notebooks/02_basket_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.

@@ -813,3 +813,72 @@ python -m unittest discover -s tests -v
 The default grid sizes are 8, 16, 32, 64, 128 and 256. The largest must be divisible by every smaller size; `--steps` accepts a different increasing nested set. Memory scales as \(N m_{\max}\), with about 16 MiB for the default finest Brownian array, plus working arrays. Reports retain the problem, seed, generator, grid settings, residual means, standard errors and RMS values. Notebook sections 11-12 expose the path allocation and grid choices alongside the existing editable financial inputs.
 
 For 8,192 paths and seed 2026, the base-case RMS falls from **2.791483** at eight intervals to **0.512118** at 256. The final mean is **-0.00276424**, with standard error **0.00565842**. Every grid's mean lies within one estimated standard error of zero in this run. These are analytical-control discretisation results, not neural training results or a demonstrated pricing speedup. Tests also cover negative rates, dividends, a shorter maturity and higher volatility. Local BSDE loss construction, PyTorch derivatives and learned controls are developed separately.
+
+## Automatic derivatives and backend checks
+
+### A smooth value map in physical coordinates
+
+`ValueNetwork` is a pointwise two-hidden-layer tanh network, initially 16 units per hidden layer. For input rows \((t,S_1,\ldots,S_d)\), it represents
+
+\[
+V_\theta(t,S)=K_*N_\theta\left(t/T_*-1,S_1/s_{*,1}-1,\ldots,S_d/s_{*,d}-1\right).
+\]
+
+The scales are fixed positive buffers, moved with the network to its selected dtype and device. They are not trainable parameters. Smooth activations permit nonzero continuous second derivatives. Every layer acts on one sample independently; there is no batch normalisation or cross-sample operation. This architecture is a derivative pilot, not a trained option pricer or a selected final architecture.
+
+With normalised coordinates \(x_0=t/T_*-1\) and \(x_i=S_i/s_{*,i}-1\), the chain rule gives
+
+\[
+V_t=\frac{K_*}{T_*}N_{x_0},\qquad
+\Delta_i=\frac{K_*}{s_{*,i}}N_{x_i},\qquad
+V_{S_iS_j}=\frac{K_*}{s_{*,i}s_{*,j}}N_{x_ix_j}.
+\]
+
+These factors are necessary for physical Greeks and for the BSDE control \(Z=A^\top\Delta\). Normalisation occurs inside `forward`, so differentiation with respect to physical inputs applies these factors automatically. The polynomial oracle uses different spot scales to expose a missing or reversed factor.
+
+### Graph and tensor contracts
+
+`value_derivatives` owns a detached copy of the input tensor and sets `requires_grad=True` on that leaf. It does not accumulate into the caller's input `.grad`. The first derivative uses `torch.autograd.grad(..., create_graph=True)`, so its computation remains differentiable. Differentiating each gradient column gives the full time/spot Hessian. Gradient columns are ordered `(time, asset 0, ..., asset d-1)`, and the Hessian has shape `(N, d+1, d+1)`.
+
+The sum of row values can be differentiated in one call because rows are independent. A batch-coupled callable violates this contract and would require a different Jacobian calculation. `parameter_graph=True` retains the derivative graph, permitting a loss involving gradients or Hessians to backpropagate to the network weights. Otherwise returned values and derivatives are detached for inspection. Differentiating through a Hessian to parameters exercises mixed third derivatives, which a forward-pass device check does not test.
+
+The network is constructed explicitly on CPU in float64, under a locally restored CPU random state. A supplied seed makes weights reproducible without changing the caller's CPU RNG. Diagnostics use a separate CPU generator for inputs. Network parameters, scale buffers and input tensors must share dtype and device. CPU float64 is the numerical baseline; CPU float32 and MPS float32 are compared against it. MPS float64 is not requested. No default dtype or global device setting is changed.
+
+The graph behaviour follows the official [autograd gradient API](https://docs.pytorch.org/docs/2.15/generated/torch.autograd.grad.html). Device trials use [MPS synchronisation](https://docs.pytorch.org/docs/2.15/generated/torch.mps.synchronize.html) around timed calls.
+
+### Independent derivative checks
+
+The scaled polynomial is
+
+\[
+P(t,S_1,S_2)=100\left[(t/2)^2+(S_1/80)^3+(S_2/120)^3
+ +(S_1/80)(S_2/120)\right].
+\]
+
+Its time derivative, spot deltas, diagonal Hessian and both mixed spot derivatives are calculated directly. The second oracle is a narrow differentiable PyTorch expression for a vanilla call at three strictly pre-expiry states. Targets come from the existing scalar Black-Scholes implementation: price, delta, gamma and the time derivative implied by the pricing PDE. This diagnostic expression is not used by the application pricing commands. Unit tests also compare the smooth network with finite differences using `gradcheck`, `gradgradcheck` and direct second spot/time bumps. Affine and constant maps check zero curvature, and batch-versus-single-row evaluation checks independence.
+
+Absolute tolerances are declared before the device trial:
+
+| Quantity | CPU float64 | Float32 |
+| --- | ---: | ---: |
+| Polynomial gradient/Hessian, vanilla delta/gamma | 2e-10 | 2e-4 |
+| Vanilla value/time derivative | 2e-9 | 5e-4 |
+| Network value/gradient/Hessian and objective parameter gradient versus CPU float64 | 2e-9 | 1e-3 |
+
+Each error retains its own units; these are bounds for this finite diagnostic set, not a common loss scale or final pricing targets. Float32 tolerances allow roundoff in higher derivatives. Passing them does not establish an error bound over an entire training domain.
+
+### Backend workload and timing scope
+
+```bash
+python -m bsde_pricing autograd --output scratch/autograd.json
+python -m bsde_pricing autograd --backend cpu --batch-size 256 --repeats 5
+python -m unittest discover -s tests -v
+```
+
+The default workload has three assets, four input coordinates and 256 rows. It evaluates the network value, gradient and full Hessian, forms an objective from all three, and backpropagates to every network parameter. Derivative terms in this diagnostic objective are scaled to dimensionless units. There is no optimiser step and no loss calibration or training result.
+
+For each backend the same fixed weights and inputs are used, followed by two warmup calls and five measured calls. Reports retain every call duration and its median. Timings include input-leaf allocation, derivative computation, gradient clearing, objective construction, parameter backward, gradient collection and numerical validation. Network setup and initial host/device copies are excluded. MPS calls are synchronised before and after measurement; validation itself may also synchronise. CPU uses one thread during the measured trial and restores the prior thread count afterwards. These are complete small diagnostic-call timings, not kernel-only timings or general CPU/GPU speed claims.
+
+`auto` always checks CPU float64 and float32, then trials MPS float32 when available. An unavailable MPS backend is recorded explicitly; `--backend mps` makes its absence a failed command. Numerical failures and unsupported operations remain in the report and give a nonzero exit status. An oracle execution failure is retained while the network workload is still attempted. The MPS trial rejects `PYTORCH_ENABLE_MPS_FALLBACK=1`, so CPU fallback cannot masquerade as an MPS result. There is no automatic backend selection for subsequent training from availability alone.
+
+Initial Linux workspace checks use PyTorch 2.15.0+cpu. Both CPU precisions pass the analytical and network comparisons. MPS is unavailable there, so Apple-silicon support, accuracy and timings require the MacBook report. The existing environment specification remains the verified MacBook specification. The next calculation is a known-solution BSDE loss check; the first trained-network notebook follows the first solver implementation.
