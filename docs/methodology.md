@@ -512,4 +512,111 @@ python -m unittest discover -s tests -v
 
 The sampling report records seed, generator, financial inputs, horizon, theoretical moments, observed moments and theoretical sampling standard errors. It retains summary statistics rather than writing all paths into JSON. The sampler stores $O(Nd)$ numbers, with a dense $O(d^3)$ factorisation and $O(Nd^2)$ correlation transform; memory and runtime still need pilots before high-dimensional experiments.
 
-The basket notebook begins with state validation. Closed-form geometric-basket prices and coordinate deltas will supply the next independent reference. Multivariate path grids, basket deltas, strong arithmetic-basket references and neural solvers remain separate work.
+The basket notebook begins with state validation. The geometric-basket reference below supplies analytical prices and coordinate deltas. Multivariate path grids, arithmetic-basket deltas, strong arithmetic-basket references and neural solvers remain separate work.
+
+## Geometric-basket reference
+
+### Reduction to one lognormal variable
+
+For the fixed positive weights in the contract, define
+
+$$G(S)=\prod_{i=1}^d S_i^{w_i},\qquad \log G=\sum_iw_i\log S_i.$$
+
+This is a geometric average **across assets at one terminal time**, not an Asian average across observation dates. Under the joint GBM model, every linear combination of log prices is Gaussian. Let $a_i=w_i\sigma_i$ and
+
+$$
+\sigma_G^2=a^\top\rho a,
+\qquad
+\ell_G=\sum_iw_i(r-q_i-\tfrac12\sigma_i^2).
+$$
+
+Then
+
+$$\log G_T\sim N(\log G_0+\ell_G\tau,\;\sigma_G^2\tau).$$
+
+Itô's formula adds the quadratic-variation correction when returning from log $G$ to $G$:
+
+$$
+\frac{dG}{G}=b_G\,dt+\sum_iw_i\sigma_i\,dW_i,
+\qquad b_G=\ell_G+\tfrac12\sigma_G^2.
+$$
+
+For weights summing to one,
+
+$$
+b_G=r-\sum_iw_iq_i-\tfrac12\left(\sum_iw_i\sigma_i^2-\sigma_G^2\right).
+$$
+
+The geometric index is not a self-financing constant-weight portfolio value, so its risk-neutral drift need not equal $r$. Even at zero dividends there is generally a drift correction. Changing correlation changes both its variance and its drift. Set $q_G=r-b_G$ as an effective carry coefficient for the scalar pricing reduction; it does not represent an additional cash dividend paid by the assets. The code retains the actual floating-point weight sum in the general expression rather than silently renormalising weights accepted within the contract's tolerance.
+
+The lognormal geometric mean also provides a useful reference in basket control-variate work; see [New control variates for pricing basket options](https://academic.oup.com/imaman/article/36/1/111/7816702). The present calculation is the exact geometric contract, rather than a lognormal approximation of the arithmetic basket.
+
+### Price and coordinate derivatives
+
+Write $F_G=\mathbb E[G_T]=G_0e^{b_G\tau}$ and $v=\sigma_G\sqrt\tau$. For $v>0$,
+
+$$
+d_1=\frac{\log(F_G/K)+\tfrac12v^2}{v},\qquad d_2=d_1-v,
+$$
+
+$$
+C=e^{-r\tau}\left(F_G\Phi(d_1)-K\Phi(d_2)\right),
+\qquad
+P=e^{-r\tau}\left(K\Phi(-d_2)-F_G\Phi(-d_1)\right).
+$$
+
+Consequently $C-P=e^{-r\tau}(F_G-K)$. Differentiating through the geometric starting value gives
+
+$$
+\frac{\partial G_0}{\partial S_k}=\frac{w_kG_0}{S_k},
+\qquad
+\Delta_k^C=\frac{w_kG_0}{S_k}e^{-q_G\tau}\Phi(d_1),
+\qquad
+\Delta_k^P=\frac{w_kG_0}{S_k}e^{-q_G\tau}(\Phi(d_1)-1).
+$$
+
+These are derivatives with respect to individual starting spots, with weights, other spots, model parameters and time fixed. The geometric basket is nonlinear in each spot: coordinate curvature contains both $C_{GG}(w_kG/S_k)^2$ and $C_Gw_k(w_k-1)G/S_k^2$. Their signs can differ, so a coordinate delta need not increase with its own spot. The scalar basket derivative is not the coordinate hedge vector. All deltas are expressed per unit of their corresponding asset spot; the common currency convention from the financial specification remains in force.
+
+`GeometricBasketReference` derives the effective parameters once and composes the existing `BlackScholesReference`, keeping one implementation of the scalar price formula and its limiting conventions. The volatility is calculated as $\|L^\top a\|$ with $\rho=LL^\top$, avoiding subtraction in a covariance quadratic form. `EuropeanCall.basket_value()` is the shared basket calculation used by payoff evaluation and simulation risk. Equal-spot geometric baskets with an exactly unit weight sum preserve $G(s,\ldots,s)=s$ directly, preventing a log/exp round trip from moving an exactly specified payoff kink.
+
+The analytical reference supports positive spots, matching dimensions, geometric contracts, expiry and zero effective volatility. At $v=0$, prices are the discounted deterministic payoffs. Off the deterministic exercise boundary, deltas follow the discounted payoff slope and chain rule; at the kink, all coordinate deltas are `null`. The single-asset, unit-weight case reduces to the existing Black–Scholes reference. Inputs or derived values outside floating-point range fail explicitly; no price or sensitivity clipping is used.
+
+### Independent simulation and coordinate bumps
+
+`MonteCarloPricer.estimate()` reuses the joint asset sampler and geometric payoff. Its price estimate does not call the analytical engine. With positive remaining variance, differentiation under the expectation gives pathwise contributions
+
+$$D_{n,k}=e^{-r\tau}\mathbf1_{G_T^{(n)}>K}\frac{w_kG_T^{(n)}}{S_k(0)}.$$
+
+`estimate_coordinate_delta(..., coordinate=k)` uses a **zero-based** coordinate. For a relative bump $\varepsilon$, set $h=\varepsilon S_k(0)$. The paired upper and lower terminal arrays scale only column $k$ by $(S_k(0)\pm h)/S_k(0)$, holding every other coordinate and all normal draws fixed. The existing payoff calculates each bumped contribution. The result contains pathwise, central-bump and paired-difference statistics, along with absolute/relative bump, positive-payoff and exercise-crossing counts. The same statistics kernel serves the earlier scalar and new coordinate interfaces.
+
+The finite bump targets a price secant. Its analytical target is compared with that secant, while the paired pathwise-minus-bump discrepancy is compared with the analytical derivative-minus-secant. Combining separate estimator variances without covariance would give the wrong paired error scale. Estimates from matched seeds across coordinates are dependent; the notebook intervals are pointwise, not simultaneous portfolio-risk bands.
+
+The coordinate Monte Carlo interface currently requires a geometric contract and positive remaining variance. It rejects expiry and entirely deterministic models; the analytical reference handles those limits. Individual zero-volatility assets remain allowed when other assets are stochastic: changing a deterministic coordinate still changes the geometric payoff. The original `estimate_delta()` retains its scalar scope, deterministic handling and report fields. Multivariate arithmetic-basket deltas are outside this interface's current scope.
+
+### Numerical evidence and reproduction
+
+The asymmetric fixture uses the earlier correlated model with weights $(0.2,0.3,0.5)$ and changes only the contract's basket type. At time zero,
+
+| Quantity | Analytical value |
+| --- | ---: |
+| Geometric spot | 104.763167412292 |
+| Effective volatility | 0.213600093633 |
+| Effective carry $q_G$ | 0.032437500000 |
+| Basket drift $b_G$ | -0.002437500000 |
+| Call price | 10.805843052329 |
+| Asset 1 delta | 0.157947844265 |
+| Asset 2 delta | 0.189537413118 |
+| Asset 3 delta | 0.263246407108 |
+
+For 100,000 joint terminal samples and seed 2026, the call estimate is **10.854093879711**, with estimated standard error **0.050017218965**. The three pathwise deltas are approximately **(0.15853841, 0.19024609, 0.26423069)**. Their errors are each approximately 1.253 estimated standard errors in this matched-path example. A common indicator and common geometric terminal value make these coordinate estimates strongly dependent; agreement is not three independent statistical confirmations.
+
+Tests independently integrate the Gaussian discounted payoff without using a normal CDF or the effective-dividend pricing reduction. Coordinate bump refinement checks the derivative formula, including delta parity. Joint Monte Carlo comparisons cover prices, pathwise deltas, central secants and paired gaps, with nonzero dividends, negative rates and nonzero valuation time. Matched-seed repricing verifies that only the selected initial spot is bumped. Scalar reduction, zero-volatility and expiry limits, exact equal-spot kinks, mixed stochastic/deterministic coordinates and invalid scope are checked separately. Quadrature price tolerance is $10^{-9}$; final spot-bump delta error is below $2\times10^{-6}$ on the tested fixture. Stochastic checks use six-standard-error budgets; they do not require every nominal 95% interval to contain its target.
+
+```bash
+python -m bsde_pricing reference --case geometric --output scratch/geometric_reference.json
+python -m bsde_pricing monte-carlo --case geometric --paths 100000 --seed 2026 --output scratch/geometric_mc.json
+python -m bsde_pricing monte-carlo --case geometric --quantity delta --coordinate 0 --paths 100000 --seed 2026 --output scratch/geometric_delta_0.json
+python -m unittest discover -s tests -v
+```
+
+The basket notebook adds analytical/simulation comparisons, one-coordinate spot changes, equicorrelation scenarios and paired bump-size diagnostics. Its pricing maturity follows the editable simulation horizon. The geometric basket remains an analytically reducible control case at high dimension. These results do not establish a neural speed advantage or supply a general arithmetic-basket closed form; the arithmetic reference is the next separate calculation.

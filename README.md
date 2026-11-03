@@ -2,7 +2,7 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, and correlated multi-asset terminal sampling with moment diagnostics. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
+The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, correlated multi-asset terminal sampling with moment diagnostics, and an exact geometric-basket price and coordinate-delta reference. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
 
 ## Environment
 
@@ -53,7 +53,7 @@ The reference handles expiry and zero volatility explicitly. Classical Greeks at
 python -m bsde_pricing monte-carlo --case vanilla --paths 100000 --seed 2026 --output scratch/vanilla_mc.json
 ```
 
-The command samples the terminal GBM state directly, applies the existing payoff and reports its discounted sample mean, standard error and approximate 95% confidence interval. The sampler supports correlated assets; this CLI price comparison remains the vanilla case. Its output retains the seed, generator type, number of positive payoffs and comparison with the separate analytical reference.
+The command samples the terminal GBM state directly, applies the existing payoff and reports its discounted sample mean, standard error and approximate 95% confidence interval. The sampler supports correlated assets; the price command compares vanilla and geometric cases with their separate analytical references. Its output retains the seed, generator type, number of positive payoffs and comparison with the separate analytical reference.
 
 For 100,000 samples with seed 2026, the base-case estimate is **9.38965721**, with standard error **0.04441069** and approximate interval **[9.30261386, 9.47670057]**. The analytical value is **9.41340338**. These are seeded simulation results; a new seed changes the estimate and interval.
 
@@ -87,7 +87,21 @@ python -m bsde_pricing sample --case correlated --paths 100000 --seed 2026 --out
 
 The three-asset example uses unequal spots, volatilities and dividends, with both positive and negative pair correlations. A Cholesky transform produces joint normal shocks for exact GBM terminal transitions. The report compares observed log-return means/covariances and terminal spot means with theoretical values and their sampling standard errors. The scalar transition retains its original seeded stream and calculation order.
 
-[Basket references](notebooks/02_basket_references.ipynb) begins with these distribution checks, covariance heatmaps, pairwise scatter plots and a correlation sweep. The [methodology](docs/methodology.md#correlated-terminal-gbm) explains the matrix orientation, uncertainty formulas and deterministic limits. The current basket experiments validate simulated states; basket-option reference prices and coordinate deltas are subsequent calculations.
+[Basket references](notebooks/02_basket_references.ipynb) begins with these distribution checks, covariance heatmaps, pairwise scatter plots and a correlation sweep. The [methodology](docs/methodology.md#correlated-terminal-gbm) explains the matrix orientation, uncertainty formulas and deterministic limits. The current basket experiments validate simulated states; the geometric-basket price and delta checks follow in the same notebook.
+
+## Geometric-basket reference
+
+```bash
+python -m bsde_pricing reference --case geometric --output scratch/geometric_reference.json
+python -m bsde_pricing monte-carlo --case geometric --paths 100000 --seed 2026 --output scratch/geometric_mc.json
+python -m bsde_pricing monte-carlo --case geometric --quantity delta --coordinate 0 --paths 100000 --seed 2026 --output scratch/geometric_delta_0.json
+```
+
+The weighted geometric basket is lognormal under the correlated GBM model. Its effective drift includes the variance correction and generally differs from the risk-free rate. The analytical reference derives the effective parameters and reuses the scalar Black–Scholes implementation. Each asset delta includes the geometric-basket chain rule.
+
+For the asymmetric three-asset case with weights 0.2, 0.3 and 0.5, the call price is **10.80584305** and coordinate deltas are **(0.15794784, 0.18953741, 0.26324641)**. With 100,000 paths and seed 2026, the Monte Carlo price is **10.85409388** with estimated standard error **0.05001722**. The zero-based `--coordinate` selects the starting spot for a pathwise/common-random-number bump comparison. Full formulas, numerical limits and independent checks are in the [methodology](docs/methodology.md#geometric-basket-reference).
+
+The basket notebook now includes these price/delta checks, selected-spot and correlation sensitivities, and paired bump diagnostics. Its geometric contract maturity follows the editable simulation horizon.
 
 ## Notebook exploration
 

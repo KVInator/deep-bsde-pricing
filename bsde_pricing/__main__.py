@@ -10,11 +10,13 @@ from .environment import EnvironmentReport
 
 if TYPE_CHECKING:
     from .black_scholes import BlackScholesResult
+    from .geometric_basket import GeometricBasketResult
     from .problems import PricingCase
 
 
 def _monte_carlo_summary(
-    args: argparse.Namespace, case: "PricingCase", reference_value: "BlackScholesResult",
+    args: argparse.Namespace, case: "PricingCase",
+    reference_value: "BlackScholesResult | GeometricBasketResult",
 ) -> dict[str, object]:
     import numpy as np
 
@@ -39,13 +41,23 @@ def _monte_carlo_summary(
             ),
         })
     else:
-        reference_delta = reference_value.call_delta
+        if case.contract.basket == "geometric":
+            delta_result = pricer.estimate_coordinate_delta(
+                case.initial_spots, coordinate=args.coordinate, n_paths=args.paths,
+                rng=rng, bump_fraction=args.bump_fraction,
+            )
+            reference_delta = reference_value.call_deltas[args.coordinate]
+            summary["coordinate"] = args.coordinate
+        else:
+            if args.coordinate != 0:
+                raise ValueError("The vanilla case has only coordinate zero.")
+            delta_result = pricer.estimate_delta(
+                case.initial_spots, n_paths=args.paths, rng=rng,
+                bump_fraction=args.bump_fraction,
+            )
+            reference_delta = reference_value.call_delta
         if reference_delta is None:
             raise ValueError("The case has no defined analytical spot delta.")
-        delta_result = pricer.estimate_delta(
-            case.initial_spots, n_paths=args.paths, rng=rng,
-            bump_fraction=args.bump_fraction,
-        )
         error = delta_result.pathwise.estimate - reference_delta
         summary.update({
             "method": "pathwise_and_common_random_number_delta", **asdict(delta_result),
@@ -119,18 +131,20 @@ def main() -> None:
     describe = commands.add_parser(
         "describe", help="show a pricing case and its financial conventions"
     )
-    describe.add_argument("--case", choices=("vanilla", "correlated"), default="vanilla")
+    describe.add_argument("--case", choices=("vanilla", "correlated", "geometric"), default="vanilla")
     reference = commands.add_parser(
         "reference", help="evaluate the analytical price and spot Greeks"
     )
-    reference.add_argument("--case", choices=("vanilla",), default="vanilla")
+    reference.add_argument("--case", choices=("vanilla", "geometric"), default="vanilla")
     monte_carlo = commands.add_parser(
         "monte-carlo", help="estimate a price and its uncertainty from IID terminal states"
     )
-    monte_carlo.add_argument("--case", choices=("vanilla",), default="vanilla")
+    monte_carlo.add_argument("--case", choices=("vanilla", "geometric"), default="vanilla")
     monte_carlo.add_argument("--paths", type=int, default=100_000)
     monte_carlo.add_argument("--seed", type=int, default=2026)
     monte_carlo.add_argument("--quantity", choices=("price", "delta"), default="price")
+    monte_carlo.add_argument("--coordinate", type=int, default=0,
+                             help="zero-based asset index for a delta calculation")
     monte_carlo.add_argument(
         "--bump-fraction", type=float, default=0.001,
         help="relative spot bump used by the delta comparison",
@@ -158,9 +172,10 @@ def main() -> None:
         if args.command == "environment":
             report = EnvironmentReport.capture().to_json()
         else:
-            from .problems import correlated_case, vanilla_case
+            from .problems import correlated_case, geometric_case, vanilla_case
 
-            case = correlated_case() if args.case == "correlated" else vanilla_case()
+            case = {"vanilla": vanilla_case, "correlated": correlated_case,
+                    "geometric": geometric_case}[args.case]()
             if args.command == "describe":
                 report = case.to_json()
             else:
@@ -168,13 +183,17 @@ def main() -> None:
                     summary = _sampling_summary(args, case)
                 else:
                     from .black_scholes import BlackScholesReference
+                    from .geometric_basket import GeometricBasketReference
 
-                    reference_value = BlackScholesReference(case.model, case.contract).evaluate(
-                        case.initial_spots[0]
+                    reference_value = (
+                        GeometricBasketReference(case.model, case.contract).evaluate(case.initial_spots)
+                        if case.contract.basket == "geometric" else
+                        BlackScholesReference(case.model, case.contract).evaluate(case.initial_spots[0])
                     )
                     if args.command == "reference":
                         summary = {
-                            "method": "black_scholes", "case": case.name,
+                            "method": ("geometric_basket" if case.contract.basket == "geometric"
+                                       else "black_scholes"), "case": case.name,
                             **asdict(reference_value),
                         }
                     elif args.command == "monte-carlo":

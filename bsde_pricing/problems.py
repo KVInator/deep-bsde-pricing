@@ -2,7 +2,7 @@
 
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -145,8 +145,8 @@ class EuropeanCall:
     def dimension(self) -> int:
         return len(self.weights)
 
-    def payoff(self, terminal_spots: ArrayLike) -> NDArray[np.float64]:
-        """Map shape (..., dimension) to the leading shape (...), including ()."""
+    def basket_value(self, terminal_spots: ArrayLike) -> NDArray[np.float64]:
+        """Map shape (..., dimension) to the basket's leading shape (...)."""
         spots = _finite_array(terminal_spots, "terminal_spots")
         if spots.ndim < 1 or spots.shape[-1] != self.dimension:
             raise ValueError("terminal_spots must have shape (..., dimension).")
@@ -160,7 +160,15 @@ class EuropeanCall:
             np.log(spots, out=log_spots, where=spots > 0)
             basket_value = np.exp(log_spots @ weights)
             basket_value = np.where(np.any(spots == 0, axis=-1), 0.0, basket_value)
-        return np.asarray(np.maximum(basket_value - self.strike, 0.0))
+            if math.fsum(self.weights) == 1.0:
+                # Preserve G(s,...,s)=s exactly, including the scalar case.
+                equal = np.all(spots == spots[..., :1], axis=-1)
+                basket_value = np.where(equal, spots[..., 0], basket_value)
+        return np.asarray(basket_value)
+
+    def payoff(self, terminal_spots: ArrayLike) -> NDArray[np.float64]:
+        """Map shape (..., dimension) to the leading shape (...), including ()."""
+        return np.asarray(np.maximum(self.basket_value(terminal_spots) - self.strike, 0.0))
 
 
 @dataclass(frozen=True)
@@ -220,3 +228,8 @@ def correlated_case() -> PricingCase:
         contract=EuropeanCall(100.0, 1.0, weights=(0.2, 0.3, 0.5)),
         initial_spots=(80.0, 100.0, 120.0),
     )
+
+
+def geometric_case() -> PricingCase:
+    case = correlated_case()
+    return replace(case, name="geometric", contract=replace(case.contract, basket="geometric"))

@@ -131,13 +131,40 @@ class MonteCarloPricer:
         """Compare pathwise delta and a central bump on paired terminal states."""
         if self.model.dimension != 1 or self.contract.weights != (1.0,):
             raise ValueError("Delta estimation requires one asset and unit weight.")
+        return self._estimate_delta(initial_spots, coordinate=0, n_paths=n_paths,
+            rng=rng, time=time, bump_fraction=bump_fraction)
+
+    def estimate_coordinate_delta(
+        self, initial_spots: ArrayLike, *, coordinate: int, n_paths: int,
+        rng: np.random.Generator, time: float = 0.0, bump_fraction: float = 0.001,
+    ) -> MonteCarloDeltaResult:
+        """Geometric-basket coordinate delta at positive remaining variance.
+
+        coordinate is zero based. Only that starting spot is bumped; all
+        terminal coordinates retain the same underlying normal draws.
+        """
+        if self.contract.basket != "geometric":
+            raise ValueError("Coordinate delta currently requires a geometric basket.")
+        if not 0 <= time < self.contract.maturity or all(s == 0 for s in self.model.volatilities):
+            raise ValueError("Geometric Monte Carlo delta requires positive remaining variance.")
+        return self._estimate_delta(initial_spots, coordinate=coordinate, n_paths=n_paths,
+            rng=rng, time=time, bump_fraction=bump_fraction)
+
+    def _estimate_delta(
+        self, initial_spots: ArrayLike, *, coordinate: int, n_paths: int,
+        rng: np.random.Generator, time: float, bump_fraction: float,
+    ) -> MonteCarloDeltaResult:
+        if (isinstance(coordinate, (bool, np.bool_))
+            or not isinstance(coordinate, (int, np.integer))
+            or not 0 <= coordinate < self.model.dimension):
+            raise ValueError("coordinate must be an integer in the model's asset range.")
         bump_fraction = float(bump_fraction)
         if not math.isfinite(bump_fraction) or not 0 < bump_fraction < 1:
             raise ValueError("bump_fraction must be finite and strictly between zero and one.")
         spots = _finite_vector(initial_spots, "initial_spots")
-        if len(spots) != 1 or spots[0] <= 0:
-            raise ValueError("initial_spots must contain one strictly positive spot.")
-        spot = spots[0]
+        if len(spots) != self.model.dimension or any(s <= 0 for s in spots):
+            raise ValueError("initial_spots must be positive and match the model dimension.")
+        spot = spots[coordinate]
         bump = spot * bump_fraction
         upper_spot, lower_spot = spot + bump, spot - bump
         if not math.isfinite(upper_spot) or not 0 < lower_spot < spot < upper_spot:
@@ -145,8 +172,9 @@ class MonteCarloPricer:
         terminal, tau, discount = self._simulate(
             spots, n_paths=n_paths, rng=rng, time=time
         )
-        deterministic = tau == 0 or self.model.volatilities[0] == 0
-        exercise = terminal[:, 0] > self.contract.strike
+        deterministic = tau == 0 or all(s == 0 for s in self.model.volatilities)
+        basket = self.contract.basket_value(terminal)
+        exercise = basket > self.contract.strike
         with np.errstate(over="raise", under="raise", invalid="raise", divide="raise"):
             if deterministic:
                 dividend_discount = math.exp(-self.model.dividend_yields[0] * tau)
@@ -154,16 +182,19 @@ class MonteCarloPricer:
                 if gap == 0:
                     raise ValueError("Delta is undefined at a deterministic exercise boundary.")
                 pathwise = np.full(len(terminal), dividend_discount if gap > 0 else 0.0)
+            elif self.contract.basket == "geometric":
+                pathwise = discount * exercise * (self.contract.weights[coordinate] * basket / spot)
             else:
                 pathwise = discount * exercise * (terminal[:, 0] / spot)
-            upper = terminal * (upper_spot / spot)
-            lower = terminal * (lower_spot / spot)
-            bumped = discount * (
-                self.contract.payoff(upper) - self.contract.payoff(lower)
-            ) / (2 * bump)
+            upper, lower = terminal.copy(), terminal.copy()
+            upper[:, coordinate] *= upper_spot / spot
+            lower[:, coordinate] *= lower_spot / spot
+            upper_payoff = self.contract.payoff(upper)
+            lower_payoff = self.contract.payoff(lower)
+            bumped = discount * (upper_payoff - lower_payoff) / (2 * bump)
             difference = pathwise - bumped
         crossing_count = int(np.count_nonzero(
-            (upper[:, 0] > self.contract.strike) != (lower[:, 0] > self.contract.strike)
+            (upper_payoff > 0) != (lower_payoff > 0)
         ))
         return MonteCarloDeltaResult(
             pathwise=_statistics(pathwise, deterministic),
