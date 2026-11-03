@@ -4,6 +4,7 @@ import json
 import math
 import platform
 import time
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -30,6 +31,8 @@ class TrainingConfig:
     validation_paths: int = 256
     evaluation_paths: int = 2048
     max_seconds: float = 180
+    terminal_weight: float = 1
+    patience: int | None = None
 
     def __post_init__(self):
         for name in ("iterations", "n_steps", "batch_size", "width", "log_every",
@@ -44,6 +47,11 @@ class TrainingConfig:
         if (not math.isfinite(self.learning_rate) or self.learning_rate <= 0
                 or not math.isfinite(self.max_seconds) or self.max_seconds <= 0):
             raise ValueError("learning_rate and max_seconds must be positive and finite.")
+        if not math.isfinite(self.terminal_weight) or self.terminal_weight <= 0:
+            raise ValueError("terminal_weight must be positive and finite.")
+        if self.patience is not None and (isinstance(self.patience, bool)
+                or not isinstance(self.patience, int) or self.patience < 1):
+            raise ValueError("patience must be a positive number of validation checks or None.")
 
 
 @dataclass(frozen=True)
@@ -60,9 +68,9 @@ class PathEvaluation:
 class FBSNNSolver:
     """Fixed-start scalar call experiment, using CPU float64 throughout.
 
-    Training, monitoring and evaluation have disjoint SeedSequence children.
-    The final iteration is retained; monitoring does not select a checkpoint.
-    Saved checkpoints support inference, not optimiser continuation.
+    Training, checkpoint selection and evaluation use disjoint random streams.
+    Selection minimises the fixed validation objective at scheduled checks.
+    An inference checkpoint and a separate continuation checkpoint are saved.
     """
 
     def __init__(self, case: PricingCase, config: TrainingConfig = TrainingConfig()):
@@ -72,9 +80,12 @@ class FBSNNSolver:
         self.case, self.config = case, config
         self.network = ValueNetwork(case.initial_spots, case.contract.maturity,
                                     case.contract.strike, width=config.width, seed=config.seed)
-        self.loss = LocalBSDELoss(PricingBSDE(case.model, case.contract), value_scale=case.contract.strike)
+        self.loss = LocalBSDELoss(PricingBSDE(case.model, case.contract),
+                                  value_scale=case.contract.strike, terminal_weight=config.terminal_weight)
         self.times = torch.from_numpy(np.linspace(0, case.contract.maturity, config.n_steps+1))
         self._has_fit = False
+        self._training = None
+        self._continuation_model = None
 
     def _batch(self, rng: np.random.Generator, n_paths: int):
         increments = rng.standard_normal((n_paths, self.config.n_steps, 1))*math.sqrt(
@@ -130,6 +141,7 @@ class FBSNNSolver:
             "mean_delta_error_se": float(path_delta_means.std(ddof=1)/math.sqrt(n_paths)),
             "local_loss": float(loss.local), "terminal_loss": float(loss.terminal),
             "total_loss": float(loss.total),
+            "unweighted_total_loss": float(loss.local+loss.terminal),
             "analytical_local_loss": float(analytical_loss.local),
         }
         arrays = [self.times.numpy().copy(), spots.copy(), values, deltas, reference_values, reference_deltas]
@@ -144,84 +156,162 @@ class FBSNNSolver:
             raise ValueError("seed must be a nonnegative integer.")
         return self._evaluate(np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(3,))), n_paths)
 
-    def fit(self) -> dict[str, object]:
-        if self._has_fit:
-            raise RuntimeError("Create a new solver for a new fit; these checkpoints are for inference.")
-        self._has_fit = True
+    def _start_training(self) -> None:
         children = np.random.SeedSequence(self.config.seed).spawn(3)
         train_rng, validation_rng, evaluation_rng = (np.random.default_rng(s) for s in children)
-        validation = self._batch(validation_rng, self.config.validation_paths)
+        self._training = {
+            "completed": 0, "status": "paused", "history": [], "window": [],
+            "training_seconds": 0.0, "best_loss": math.inf, "best_step": 0,
+            "best_state": None, "checks_without_improvement": 0,
+            "train_rng_state": train_rng.bit_generator.state,
+            "evaluation_rng_state": evaluation_rng.bit_generator.state,
+            "validation": self._batch(validation_rng, self.config.validation_paths),
+            "torch_rng_state": torch.get_rng_state().clone(),
+            "optimizer_state": None,
+        }
+
+    def _record(self, elapsed_seconds: float) -> None:
+        state = self._training
+        result = self.loss(self.network, self.times, *state["validation"], parameter_graph=False)
+        total = float(result.total)
+        if not math.isfinite(total):
+            raise ArithmeticError("Nonfinite validation objective.")
+        if total < state["best_loss"]:
+            state.update(best_loss=total, best_step=state["completed"],
+                         best_state=deepcopy(self.network.state_dict()), checks_without_improvement=0)
+        else:
+            state["checks_without_improvement"] += 1
+        state["history"].append({
+            "step": state["completed"], "elapsed_seconds": elapsed_seconds,
+            "training_loss_window_mean": float(np.mean(state["window"])) if state["window"] else None,
+            "validation_local": float(result.local), "validation_terminal": float(result.terminal),
+            "validation_total": total, **self.initial_value(),
+        })
+        state["window"].clear()
+
+    def fit(self, *, stop_after: int | None = None) -> dict[str, object]:
+        """Fit to an absolute update count; a pause does not inspect evaluation paths.
+
+        Validation is checked at update zero, log_every updates and the full
+        configured budget. Pausing between checks preserves the loss window.
+        max_seconds limits this invocation; training_seconds accumulates across
+        invocations. The learning-rate schedule always uses config.iterations.
+        """
+        if self._has_fit:
+            raise RuntimeError("Load resume.pt to continue a paused or time-limited run.")
+        if stop_after is not None and (isinstance(stop_after, bool)
+                or not isinstance(stop_after, int) or not 1 <= stop_after <= self.config.iterations):
+            raise ValueError("stop_after must be an absolute update count within the configured budget.")
+        target = self.config.iterations if stop_after is None else stop_after
+        if self._training is not None and target <= self._training["completed"]:
+            raise ValueError("stop_after must exceed the completed update count.")
+        self._has_fit = True
+        if self._training is None:
+            self._start_training()
+        state = self._training
+        rng = np.random.default_rng()
+        rng.bit_generator.state = state["train_rng_state"]
         optimizer = torch.optim.Adam(self.network.parameters(), lr=self.config.learning_rate)
-        history = []
+        if state["optimizer_state"] is not None:
+            optimizer.load_state_dict(state["optimizer_state"])
         old_threads = torch.get_num_threads()
-        completed = 0
-        window = []
         started = time.perf_counter()
         try:
             torch.set_num_threads(1)
-            oracle = AnalyticalCall(self.case.model, self.case.contract)
-            analytical_validation = self.loss(oracle, self.times, *validation, parameter_graph=False)
-            def record(step):
-                result = self.loss(self.network, self.times, *validation, parameter_graph=False)
-                history.append({"step": step, "elapsed_seconds": time.perf_counter()-started,
-                                "training_loss_window_mean": float(np.mean(window)) if window else None,
-                                "validation_local": float(result.local), "validation_terminal": float(result.terminal),
-                                "validation_total": float(result.total), **self.initial_value()})
-                window.clear()
-            record(0)
-            for step in range(1, self.config.iterations+1):
-                if time.perf_counter()-started >= self.config.max_seconds:
-                    break
-                learning_rate = self.config.learning_rate*(0.3 if step > 0.7*self.config.iterations else 1)
-                for group in optimizer.param_groups: group["lr"] = learning_rate
-                states, increments = self._batch(train_rng, self.config.batch_size)
-                optimizer.zero_grad(set_to_none=True)
-                result = self.loss(self.network, self.times, states, increments)
-                result.total.backward()
-                if not all(p.grad is not None and bool(torch.isfinite(p.grad).all()) for p in self.network.parameters()):
-                    raise ArithmeticError("Nonfinite or missing training gradient.")
-                optimizer.step()
-                completed = step
-                window.append(float(result.total.detach()))
-                if step % self.config.log_every == 0 or step == self.config.iterations:
-                    record(step)
-            if history[-1]["step"] != completed: record(completed)
-            training_seconds = time.perf_counter()-started
-            evaluation_started = time.perf_counter()
-            evaluation = self._evaluate(evaluation_rng, self.config.evaluation_paths)
-            evaluation_seconds = time.perf_counter()-evaluation_started
+            with torch.random.fork_rng(devices=[]):
+                torch.set_rng_state(state["torch_rng_state"])
+                if not state["history"]:
+                    analytical = self.loss(AnalyticalCall(self.case.model, self.case.contract),
+                                           self.times, *state["validation"], parameter_graph=False)
+                    state["analytical_validation_local"] = float(analytical.local)
+                    self._record(state["training_seconds"]+time.perf_counter()-started)
+                status = "paused"
+                for step in range(state["completed"]+1, target+1):
+                    if time.perf_counter()-started >= self.config.max_seconds:
+                        status = "time_budget_reached"
+                        break
+                    learning_rate = self.config.learning_rate*(0.3 if step > 0.7*self.config.iterations else 1)
+                    for group in optimizer.param_groups:
+                        group["lr"] = learning_rate
+                    states, increments = self._batch(rng, self.config.batch_size)
+                    optimizer.zero_grad(set_to_none=True)
+                    result = self.loss(self.network, self.times, states, increments)
+                    result.total.backward()
+                    if not all(p.grad is not None and bool(torch.isfinite(p.grad).all())
+                               for p in self.network.parameters()):
+                        raise ArithmeticError("Nonfinite or missing training gradient.")
+                    optimizer.step()
+                    if not all(bool(torch.isfinite(p).all()) for p in self.network.parameters()):
+                        raise ArithmeticError("Nonfinite updated parameter.")
+                    state["completed"] = step
+                    state["window"].append(float(result.total.detach()))
+                    if step % self.config.log_every == 0 or step == self.config.iterations:
+                        self._record(state["training_seconds"]+time.perf_counter()-started)
+                        if (self.config.patience is not None
+                                and state["checks_without_improvement"] >= self.config.patience):
+                            status = "early_stopped"
+                            break
+                if state["completed"] == self.config.iterations:
+                    status = "completed"
+                state["torch_rng_state"] = torch.get_rng_state().clone()
+            state["training_seconds"] += time.perf_counter()-started
+            state["status"] = status
+            state["train_rng_state"] = rng.bit_generator.state
+            state["optimizer_state"] = deepcopy(optimizer.state_dict())
+            self._continuation_model = deepcopy(self.network.state_dict())
+            evaluation, last_evaluation = None, None
+            evaluation_seconds = 0.0
+            if status != "paused":
+                evaluation_started = time.perf_counter()
+                evaluation_rng = np.random.default_rng()
+                evaluation_rng.bit_generator.state = state["evaluation_rng_state"]
+                last_evaluation = self._evaluate(evaluation_rng, self.config.evaluation_paths).summary
+                # Rewind only the independent evaluation stream for a paired comparison.
+                evaluation_rng.bit_generator.state = state["evaluation_rng_state"]
+                self.network.load_state_dict(state["best_state"])
+                evaluation = self._evaluate(evaluation_rng, self.config.evaluation_paths).summary
+                evaluation_seconds = time.perf_counter()-evaluation_started
         finally:
             torch.set_num_threads(old_threads)
-        initial = evaluation.summary["initial"]
+        initial = evaluation["initial"] if evaluation is not None else None
         return {
-            "method": "value_gradient_fbsnn", "status": "completed" if completed == self.config.iterations else "time_budget_reached",
+            "method": "value_gradient_fbsnn", "status": status,
             "problem": json.loads(self.case.to_json()), "config": asdict(self.config),
             "device": "cpu", "dtype": "torch.float64", "cpu_threads": 1,
             "python": platform.python_version(), "torch": str(torch.__version__), "numpy": np.__version__,
-            "system": platform.platform(), "completed_updates": completed,
-            "training_paths_drawn": completed*self.config.batch_size,
+            "system": platform.platform(), "completed_updates": state["completed"],
+            "training_paths_drawn": state["completed"]*self.config.batch_size,
             "stream_children": {"training": 0, "validation": 1, "evaluation": 2},
-            "checkpoint_rule": "last_completed_update", "history": history,
-            "validation_analytical_local_loss": float(analytical_validation.local),
-            "training_seconds": training_seconds, "evaluation_seconds": evaluation_seconds,
-            "evaluation": evaluation.summary,
+            "checkpoint_rule": "minimum_validation_total_at_scheduled_checks",
+            "selected_step": state["best_step"], "selected_validation_total": state["best_loss"],
+            "history": deepcopy(state["history"]),
+            "validation_analytical_local_loss": state["analytical_validation_local"],
+            "training_seconds": state["training_seconds"], "evaluation_seconds": evaluation_seconds,
+            "evaluation": evaluation, "last_evaluation": last_evaluation,
             "inspection_targets": {"price_absolute_error": 0.25, "delta_absolute_error": 0.02},
-            "targets_met": {"price": abs(initial["price_error"]) <= 0.25,
-                            "delta": abs(initial["delta_error"]) <= 0.02},
+            "targets_met": None if initial is None else {
+                "price": abs(initial["price_error"]) <= 0.25, "delta": abs(initial["delta_error"]) <= 0.02},
         }
 
     def save(self, directory: Path, report: dict[str, object]) -> None:
-        """Create a new run directory; existing runs are never overwritten."""
+        """Save selected inference weights and current optimiser/RNG continuation."""
+        if self._training is None or self._continuation_model is None:
+            raise RuntimeError("Fit a run before saving it.")
+        if (report.get("config") != asdict(self.config)
+                or report.get("completed_updates") != self._training["completed"]
+                or report.get("status") != self._training["status"]):
+            raise ValueError("Report does not describe the current training state.")
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=False)
-        torch.save({"format_version": 1, "problem": self.case.to_json(), "config": asdict(self.config),
-                    "model_state": self.network.state_dict()}, directory/"model.pt")
+        common = {"format_version": 2, "problem": self.case.to_json(), "config": asdict(self.config)}
+        torch.save({**common, "model_state": self._training["best_state"]}, directory/"model.pt")
+        torch.save({**common, "model_state": self._continuation_model,
+                    "training_state": self._training}, directory/"resume.pt")
         (directory/"report.json").write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=False)+"\n")
 
     @classmethod
-    def load(cls, checkpoint: Path) -> "FBSNNSolver":
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        if payload["format_version"] != 1:
+    def _from_payload(cls, payload: dict) -> "FBSNNSolver":
+        if payload["format_version"] not in (1, 2):
             raise ValueError("Unsupported checkpoint format.")
         data = json.loads(payload["problem"])
         case = PricingCase(data["name"], GBMModel(**data["model"]),
@@ -233,18 +323,40 @@ class FBSNNSolver:
         solver.network.load_state_dict(payload["model_state"], strict=True)
         if not all(bool(torch.isfinite(p).all()) for p in solver.network.parameters()):
             raise ValueError("Checkpoint has nonfinite parameters.")
+        return solver
+
+    @classmethod
+    def load(cls, checkpoint: Path) -> "FBSNNSolver":
+        """Load version 1 or 2 inference weights, without fitting."""
+        solver = cls._from_payload(torch.load(checkpoint, map_location="cpu", weights_only=True))
         solver.network.eval()
         solver._has_fit = True
         return solver
 
+    @classmethod
+    def resume(cls, checkpoint: Path) -> "FBSNNSolver":
+        """Continue the latest update, rather than the selected inference weights."""
+        payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        if payload.get("format_version") != 2 or "training_state" not in payload:
+            raise ValueError("Continuation requires a version 2 resume.pt checkpoint.")
+        solver = cls._from_payload(payload)
+        state = payload["training_state"]
+        if state["status"] not in ("paused", "time_budget_reached"):
+            raise ValueError("Only paused or time-limited runs can continue.")
+        if not 0 <= state["completed"] < solver.config.iterations:
+            raise ValueError("Invalid completed update count in continuation checkpoint.")
+        solver._training = state
+        return solver
 
-def train_and_save(case: PricingCase, config: TrainingConfig, directory: Path) -> dict[str, object]:
+
+def train_and_save(case: PricingCase, config: TrainingConfig, directory: Path,
+                   *, stop_after: int | None = None) -> dict[str, object]:
     directory = Path(directory)
     if directory.exists():
         raise FileExistsError(f"Run directory already exists: {directory}")
     solver = FBSNNSolver(case, config)
     try:
-        report = solver.fit()
+        report = solver.fit(stop_after=stop_after)
     except (RuntimeError, ArithmeticError, ValueError) as exc:
         if not directory.exists():
             directory.mkdir(parents=True)

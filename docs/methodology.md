@@ -992,9 +992,9 @@ Adam follows the PyTorch implementation; checkpoints save module state as descri
 
 NumPy SeedSequence children of seed 2026 have explicit responsibilities: child 0 supplies fresh training paths; child 1 supplies 256 fixed monitoring paths; child 2 supplies 2,048 evaluation paths drawn only after fitting. CPU weight initialisation uses the same recorded seed under the network's locally restored Torch RNG context. No global NumPy or Torch RNG is consumed by path generation or network initialisation.
 
-Monitoring is descriptive. The saved model is the last completed update, even if an earlier monitoring point had a smaller analytical error. Each logging window reports its mean pre-update training loss; monitoring values are evaluated after the logged update. History begins with the untrained model. The analytical local loss is also evaluated on the fixed monitoring paths as a discretisation comparison, not a lower bound on the objective.
+For this first recorded run, monitoring is descriptive. Its saved model is the last completed update, even if an earlier monitoring point had a smaller analytical error. Each logging window reports its mean pre-update training loss; monitoring values are evaluated after the logged update. History begins with the untrained model. The analytical local loss is also evaluated on the fixed monitoring paths as a discretisation comparison, not a lower bound on the objective.
 
-The training command creates a new directory containing `model.pt` and `report.json`. Existing directories are rejected before fitting, so previous results are preserved. The checkpoint contains tensors and primitive configuration/financial metadata; loading uses `weights_only=True`, CPU mapping, strict state-dictionary matching and validation that saved scales agree with the financial metadata. Loaded checkpoints support inference. Exact optimiser/RNG continuation is separate work. A new fit requires a new solver instance. Numerical failures raise explicitly and retain a failure record instead of a successful-run report.
+The first run created a directory containing `model.pt` and `report.json`. Existing directories are rejected before fitting, so previous results are preserved. The checkpoint contains tensors and primitive configuration/financial metadata; loading uses `weights_only=True`, CPU mapping, strict state-dictionary matching and validation that saved scales agree with the financial metadata. Loaded checkpoints support inference. The original version 1 checkpoint has no optimiser/RNG continuation state. Version 2 continuation and validation selection are specified in the next section. A new fit requires a new solver instance. Numerical failures raise explicitly and retain a failure record instead of a successful-run report.
 
 ### Independent evaluation
 
@@ -1033,3 +1033,85 @@ The default directory must be new. An explicitly named alternative directory ret
 The ARM64 MacBook run completes all 3,000 updates in 6.20594 seconds, with a separately recorded evaluation time of 0.11724 seconds, using Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 on macOS 27.0.1. All 68 tests pass without recorded warnings. Initial price/delta and the recorded monitoring loss components match the workspace run within approximately 2e-14 over the 31 logged checkpoints. This is agreement for one configuration and seed, not a training-seed robustness study or a general cross-platform timing comparison.
 
 The executed notebook at [4603398](https://github.com/KVInator/deep-bsde-pricing/commit/4603398e996089a62006b6cc491238933691c373) has eight sequential code cells, five saved figures, unchanged source and no recorded error or stderr outputs. It loads the saved checkpoint and reports the same initial price and delta as the training report. Its separate 512-path sample gives price RMSE 0.9037401, delta RMSE 0.1169896 and terminal payoff RMSE 1.720026. The initial price target is met and the delta target remains missed. State slices retain slope errors and sampled bound violations; the terminal fit remains imperfect. The first experiment is verified, while improving accuracy and assessing variability remain subsequent research questions.
+
+
+## Training reproducibility and loss weighting
+
+### Fixed comparison and selection rule
+
+The comparison measures seed variability and one change to the objective. It uses seeds 2026, 2027 and 2028, terminal weights \(\lambda=1,5\), and the first experiment's 337-parameter network, 16 time intervals, 128 paths per update and 3,000-update Adam schedule. The six configurations are written to `design.json` before training. There is no architecture, activation, optimiser or additional weight search. The original run directory remains separate.
+
+For a batch of exact GBM paths, write the previously defined discounted local residual as \(R_{n,m}(\theta)\), terminal error as \(E_n(\theta)=e^{-rT}[V_\theta(T,S_T^{(n)})-g(S_T^{(n)})]\), and strike scale as \(K\). The fitted objective is
+
+\[
+L_\lambda(\theta)=\underbrace{\frac1N\sum_{n=1}^N\sum_{m=0}^{M-1}(R_{n,m}(\theta)/K)^2}_{L_{\mathrm{local}}}
++\lambda\underbrace{\frac1N\sum_{n=1}^N(E_n(\theta)/K)^2}_{L_{\mathrm{terminal}}}.
+\]
+
+Both components are dimensionless. Increasing \(\lambda\) multiplies the terminal component of the parameter gradient by five, so \(\nabla_\theta L_5=\nabla_\theta L_{\mathrm{local}}+5\nabla_\theta L_{\mathrm{terminal}}\). This changes the compromise that Adam follows. It does not alter the payoff, supply analytical labels or impose exact terminal matching. Weighted totals for different \(\lambda\) values are different objectives. Cross-weight tables therefore retain raw local and terminal losses, their unweighted sum, and price/delta/terminal RMSE in physical units.
+
+For each seed, the two weights share the initial parameters and the three SeedSequence streams: child 0 for fresh training paths, child 1 for 256 fixed validation paths and child 2 for 2,048 held-out evaluation paths. Separate seeds use separate initialisations and streams. The branching mechanism follows [NumPy's SeedSequence documentation](https://numpy.org/doc/stable/reference/random/parallel.html). Within each seed, a weight comparison is paired; the six runs are not six independent observations of one estimator.
+
+Validation is measured at update zero, every 100 updates and the full configured update budget. The selected update is
+
+\[
+k^*=\underset{k\in\{0,100,\ldots,3000\}}{\operatorname{argmin}}\;L_\lambda^{\mathrm{validation}}(\theta_k),
+\]
+
+with the earlier update retained on an exact tie. Analytical errors are recorded for inspection but do not enter this rule. Selection compares candidates within one configured objective; a small validation objective does not guarantee the smallest analytical price or delta error. Each final and selected model is evaluated on identical fresh child-2 paths, drawn only after that run ends. Inspecting this exploratory study does not turn the same evaluation paths into a future untouched final test set.
+
+### Early stopping, pauses and timing
+
+`TrainingConfig.patience` optionally stops after that many consecutive scheduled validation checks without a strict new minimum. Its unit is validation checks, not optimiser updates. The best model is retained while the last model and stopping counter remain in continuation state. Early stopping is disabled in the six-run study so that all completed configurations have equal 3,000-update budgets. It is not triggered by an analytical accuracy target.
+
+`fit(stop_after=k)` pauses at an absolute update count. A pause does not add an off-schedule validation check, clear the unfinished training-loss window or inspect held-out paths. The learning-rate change remains tied to 70% of `config.iterations`, not the length of the current invocation. A 180-second cap applies to each fitting invocation; cumulative fitting time is retained across continuations. A time-limited run is explicitly labelled and evaluated at its actual update count. Its selected model can only come from scheduled checks already reached. Completed and early-stopped runs are closed; a paused or time-limited run may continue from its saved state.
+
+Training time includes path generation, differentiable losses, Adam updates, finite-parameter checks and scheduled validation. Model/optimiser construction and the initial fixed-validation draw precede that timer. Evaluation time includes both the final and selected model assessments, each with the analytical comparisons. Study wall time also includes the continuation verification and checkpoint/report writes. Timing is reported rather than used for checkpoint selection.
+
+### Two checkpoint responsibilities
+
+`model.pt` stores the validation-selected weights for inference. `resume.pt` stores the latest update, which may be later than the selected update. Its version 2 payload contains:
+
+- Financial metadata and the complete training configuration.
+- Current network parameters and Adam state, including moment estimates and update counters.
+- Training and evaluation generator states, fixed validation states/increments and the locally owned Torch RNG state.
+- Completed update count, the best model/loss/update, checks without improvement, history, accumulated time and unfinished training-loss window.
+
+The fixed validation tensors have shapes \((256,17,1)\) for states and \((256,16,1)\) for independent Brownian increments under the default setup. The training stream's current state, rather than its starting seed alone, determines the next batch. Resetting Adam's moments or replaying the initial random stream would create another optimisation trajectory. The implementation follows the [PyTorch checkpoint guidance](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html) for saving model and optimiser state and also retains the experiment-specific continuation state above. Loading uses CPU mapping and `weights_only=True`. The original version 1 inference checkpoint remains supported and cannot be resumed as if optimiser state had been saved.
+
+The study first runs a bounded 80-update verification using four time intervals, width four and 16 training paths per update. It pauses after update 37, between 20-update logging checks and before the learning-rate change at update 57. The resumed and uninterrupted runs must match bitwise in current weights, Adam state, training/evaluation/Torch RNG state, fixed validation paths, selected model and update, stopping counter, unfinished window, numerical history and held-out evaluation. Elapsed times are excluded. All checks pass on the development runtime. Exact equality on this runtime does not promise bitwise agreement after changing library versions, hardware or numerical backends.
+
+```bash
+python -m bsde_pricing train --run-dir scratch/runs/pause_example --iterations 3000 --stop-after 731
+python -m bsde_pricing train --resume scratch/runs/pause_example/resume.pt --run-dir scratch/runs/continued_example
+```
+
+Both output directories must be new. Resume uses the saved financial and training configuration; conflicting configuration flags are rejected. The files under `pause_example` remain intact. Loading `model.pt` with `FBSNNSolver.load` evaluates the selected model without fitting; `FBSNNSolver.resume` is the explicit continuation entry point.
+
+### Measured comparison
+
+The development-workspace study uses Linux, Python 3.12.14, NumPy 2.3.5, PyTorch 2.15.0+cpu, CPU float64 and one Torch thread. All six runs complete 3,000 updates with no recorded failures or time-limit stops. Study wall time is 99.25 seconds; individual fitting times range from 14.17 to 18.27 seconds. These timings include the current validation and finite-parameter checks and are not a speed comparison against the earlier implementation or the MacBook.
+
+| Seed | Terminal weight | Selected update | Selected price error | Selected delta error | Final price error | Final delta error | Fit seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026 | 1 | 2400 | +0.1537589 | -0.0827162 | +0.1488942 | -0.0826271 | 15.327 |
+| 2026 | 5 | 1400 | -0.1967637 | -0.1093516 | +0.2311939 | -0.0861227 | 14.723 |
+| 2027 | 1 | 3000 | +0.1561873 | -0.0276475 | +0.1561873 | -0.0276475 | 14.167 |
+| 2027 | 5 | 3000 | +0.2583376 | -0.0588113 | +0.2583376 | -0.0588113 | 16.207 |
+| 2028 | 1 | 3000 | -0.1541622 | +0.0044700 | -0.1541622 | +0.0044700 | 15.536 |
+| 2028 | 5 | 2900 | +0.0244822 | +0.0448844 | -0.1747560 | +0.0500151 | 18.266 |
+
+Weight-one selected-model delta error has mean -0.03530 and sample standard deviation 0.04409; weight five gives mean -0.04109 and sample standard deviation 0.07863. The sample standard deviation uses \(s=\sqrt{\sum_{i=1}^3(x_i-\bar{x})^2/(3-1)}\). It describes the observed seed dispersion. Three seeds do not estimate extreme failure probabilities reliably. The initial errors themselves are deterministic evaluations of each trained network and have no Monte Carlo standard error.
+
+The initial price target is met by all three selected weight-one models and two selected weight-five models. The initial delta target is met by one selected weight-one model and no selected weight-five model. A mean signed error can conceal large errors with opposing signs. The full per-seed table remains the primary evidence.
+
+At the final update, weight five improves all three paired pre-expiry price RMSEs, delta RMSEs and terminal payoff RMSEs. The mean terminal RMSE falls from 1.48912 to 1.39306. This does not consistently improve the initial delta: the final delta error is slightly larger in magnitude for seed 2026, larger for 2027 and larger for 2028. After validation selection, mean terminal RMSE is 1.51650 for weight one and 1.52509 for weight five. In particular, seed 2026 with weight five selects update 1,400 and has terminal RMSE 2.01726 versus 1.62291 at its final update. Validation selection is therefore functioning as specified without guaranteeing improved held-out fit.
+
+Seed 2026 with weight one reproduces the original final-update price and delta errors, +0.14889424 and -0.08262714, and terminal RMSE 1.75547535. Its validation-selected update is 2,400 and has delta error -0.08271617. The original run is preserved; the study does not replace it with a favourable seed. The remaining error cannot be attributed uniquely to optimisation, network approximation, the terminal kink, validation sampling or the finite time grid from these comparisons.
+
+```bash
+python -m bsde_pricing training-study --run-dir scratch/runs/reproducibility
+python -m unittest discover -s tests -v
+```
+
+`TrainingStudy` owns the fixed matrix, persistence, resume verification and across-seed summary; the CLI delegates to it. `study.json` is updated after every run and retains failed/time-limited entries. Means, sample standard deviations, ranges and sample counts are recorded rather than silently omitting failed runs. Directory protection rejects a repeated destination before training. The neural notebook retains the first experiment and adds the per-seed tables, selected/final comparisons, loss-component histories, continuation check and inference reload check. All 72 tests pass without warnings in the development workspace, including exact continuation across logging/schedule boundaries, selection, optional stopping, legacy checkpoint loading, stream independence and failed-run summaries. Notebook verification executes 13 code cells in a fresh IPython process and retains eight reviewed figures. MacBook execution of the new study remains a separate verification step.

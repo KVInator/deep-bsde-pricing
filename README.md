@@ -10,16 +10,28 @@ The implementation includes classical vanilla and basket references, exact GBM s
 python -m bsde_pricing train --run-dir scratch/runs/vanilla_fbsnn
 ```
 
-The default experiment uses CPU float64, two 16-unit tanh layers, 16 time intervals and 3,000 Adam updates with 128 fresh paths per update. A separate fixed stream monitors the loss; fresh post-training paths measure errors against Black-Scholes. The final update is retained without tuning the budget to meet the inspection targets.
+The default experiment uses CPU float64, two 16-unit tanh layers, 16 time intervals and 3,000 Adam updates with 128 fresh paths per update. A separate fixed stream monitors the loss; fresh post-training paths measure errors against Black-Scholes. The first recorded run retained the final update without tuning the budget to meet the inspection targets. Current runs also retain validation-selected weights and the final-update evaluation, as described below.
 
 | Initial quantity | Learned | Analytical | Signed error | Absolute-error target |
 | --- | ---: | ---: | ---: | ---: |
 | Price | 9.56229763 | 9.41340338 | +0.14889424 | 0.25, met |
 | Delta | 0.51607919 | 0.59870633 | -0.08262714 | 0.02, missed |
 
-These are single-seed development-workspace results. The delta target is missed despite a lower training loss. On 2,048 fresh paths, pre-expiry price RMSE is 0.92230, delta RMSE is 0.11624 and terminal payoff RMSE is 1.75548. The unconstrained network can also violate option bounds in sampled tails. This is an initial experiment, with its errors retained for analysis.
+These are the retained first-run results, subsequently reproduced on the ARM64 MacBook. The delta target is missed despite a lower training loss. On 2,048 fresh paths, pre-expiry price RMSE is 0.92230, delta RMSE is 0.11624 and terminal payoff RMSE is 1.75548. The unconstrained network can also violate option bounds in sampled tails. This is an initial experiment, with its errors retained for analysis.
 
-The command saves `model.pt` and `report.json` under the chosen new run directory. Existing runs are protected. Open [Neural solvers](notebooks/03_neural_solvers.ipynb) for saved-run learning curves, price/delta errors, fresh trajectories, conditional state slices and terminal-fit diagnostics. The [training specification](docs/methodology.md#first-value-gradient-training-experiment) records the objective, data streams, checkpoint rule, timing scope and limits of the fixed-start experiment.
+The command now saves selected inference weights in `model.pt`, continuation state in `resume.pt` and both evaluations in `report.json` under the chosen new run directory. The original version 1 checkpoint remains readable. Existing runs are protected. Open [Neural solvers](notebooks/03_neural_solvers.ipynb) for saved-run learning curves, price/delta errors, fresh trajectories, conditional state slices and terminal-fit diagnostics. The [training specification](docs/methodology.md#first-value-gradient-training-experiment) records the objective, data streams, checkpoint rule, timing scope and limits of the fixed-start experiment.
+
+## Reproducibility and loss weighting
+
+```bash
+python -m bsde_pricing training-study --run-dir scratch/runs/reproducibility
+```
+
+The study fixes seeds 2026, 2027 and 2028 and compares terminal-loss weights 1 and 5 with paired initial weights and path streams. Architecture, time grid and the 3,000-update budget stay fixed. Checkpoint selection minimises the fixed validation objective; fresh analytical errors assess the selected and final models separately. A short continuation check must reproduce the uninterrupted model, Adam state, streams and evaluation exactly before the study runs.
+
+All six development-workspace runs completed. Selected-model delta errors for weight 1 were -0.08272, -0.02765 and +0.00447; weight 5 gave -0.10935, -0.05881 and +0.04488. Stronger terminal weighting improved final-update fresh-path RMSEs but did not consistently improve the initial delta. The [comparison specification and results](docs/methodology.md#training-reproducibility-and-loss-weighting) retain all seeds, checkpoint choices, runtime and limitations. The neural notebook adds tables and three figures without retraining.
+
+Each run directory is new and protected. The study writes `design.json`, incremental `study.json`, a continuation check, and six run directories with inference and continuation checkpoints. Optional `train --patience N` stops after N scheduled validation checks without improvement; the paired study disables early stopping to keep its update budget fixed. Pause/resume commands are in the methodology.
 
 ## Environment
 

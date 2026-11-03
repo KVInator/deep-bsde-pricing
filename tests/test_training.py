@@ -102,6 +102,75 @@ class TrainingTests(unittest.TestCase):
             self.assertEqual(failure['error'], 'nonfinite loss')
             self.assertFalse((directory/'model.pt').exists())
 
+    def test_resume_matches_uninterrupted_across_schedule_and_log_boundaries(self):
+        full = FBSNNSolver(vanilla_case(), self.config)
+        full_report = full.fit()
+        partial = FBSNNSolver(vanilla_case(), self.config)
+        paused = partial.fit(stop_after=7)
+        self.assertIsNone(paused['evaluation'])
+        self.assertEqual([h['step'] for h in paused['history']], [0, 5])
+        with tempfile.TemporaryDirectory(dir='scratch/tests') as temp:
+            directory = Path(temp)
+            partial.save(directory/'pause', paused)
+            resumed = FBSNNSolver.resume(directory/'pause'/'resume.pt')
+            before = torch.get_rng_state().clone()
+            resumed_report = resumed.fit()
+            self.assertTrue(torch.equal(before, torch.get_rng_state()))
+            resumed.save(directory/'resumed', resumed_report)
+            full.save(directory/'full', full_report)
+            a = torch.load(directory/'full'/'resume.pt', weights_only=True)
+            b = torch.load(directory/'resumed'/'resume.pt', weights_only=True)
+            for key in a['model_state']:
+                self.assertTrue(torch.equal(a['model_state'][key], b['model_state'][key]))
+            left, right = a['training_state'], b['training_state']
+            self.assertEqual(left['train_rng_state'], right['train_rng_state'])
+            self.assertEqual(left['window'], right['window'])
+            for pid, fields in left['optimizer_state']['state'].items():
+                for name, value in fields.items():
+                    self.assertTrue(torch.equal(value, right['optimizer_state']['state'][pid][name]))
+            histories = [[{k: v for k, v in h.items() if k != 'elapsed_seconds'} for h in r['history']]
+                         for r in (full_report, resumed_report)]
+            self.assertEqual(histories[0], histories[1])
+            self.assertEqual(full_report['evaluation'], resumed_report['evaluation'])
+            self.assertEqual(full_report['last_evaluation'], resumed_report['last_evaluation'])
+            with self.assertRaises(ValueError): FBSNNSolver.resume(directory/'full'/'resume.pt')
+            with self.assertRaises(ValueError): FBSNNSolver.resume(directory/'full'/'model.pt')
+
+    def test_selection_uses_validation_objective_and_optional_patience(self):
+        solver = FBSNNSolver(vanilla_case(), replace(self.config, terminal_weight=5))
+        report = solver.fit()
+        best = min(report['history'], key=lambda h: h['validation_total'])
+        self.assertEqual(report['selected_step'], best['step'])
+        self.assertEqual(report['selected_validation_total'], best['validation_total'])
+        self.assertAlmostEqual(report['evaluation']['total_loss'],
+                               report['evaluation']['local_loss']+5*report['evaluation']['terminal_loss'])
+        stopped = FBSNNSolver(vanilla_case(), replace(self.config, patience=1))
+        original = stopped.loss.forward
+        def constant_validation(*args, **kwargs):
+            result = original(*args, **kwargs)
+            return replace(result, total=result.total*0+1) if kwargs.get('parameter_graph') is False else result
+        with patch.object(stopped.loss, 'forward', side_effect=constant_validation):
+            result = stopped.fit()
+        self.assertEqual(result['status'], 'early_stopped')
+        self.assertEqual(result['completed_updates'], 5)
+        self.assertEqual(result['selected_step'], 0)
+
+    def test_legacy_checkpoint_and_invalid_continuation_controls(self):
+        solver = FBSNNSolver(vanilla_case(), self.config)
+        legacy_config = {k: v for k, v in self.config.__dict__.items() if k not in ('terminal_weight', 'patience')}
+        with tempfile.TemporaryDirectory(dir='scratch/tests') as temp:
+            path = Path(temp)/'legacy.pt'
+            torch.save({'format_version': 1, 'problem': solver.case.to_json(),
+                        'config': legacy_config, 'model_state': solver.network.state_dict()}, path)
+            restored = FBSNNSolver.load(path)
+            self.assertEqual(restored.initial_value(), solver.initial_value())
+            with self.assertRaises(ValueError): FBSNNSolver.resume(path)
+        for kwargs in ({'terminal_weight': 0}, {'terminal_weight': float('nan')},
+                       {'patience': 0}, {'patience': True}):
+            with self.assertRaises(ValueError): TrainingConfig(**kwargs)
+        for count in (0, True, 13):
+            with self.assertRaises(ValueError): solver.fit(stop_after=count)
+
 
 if __name__ == '__main__':
     unittest.main()

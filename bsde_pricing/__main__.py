@@ -216,8 +216,14 @@ def main() -> None:
     train = commands.add_parser("train", help="run the bounded one-asset value-gradient experiment")
     train.add_argument("--case", choices=("vanilla",), default="vanilla")
     train.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_fbsnn"))
-    train.add_argument("--iterations", type=int, default=3000)
-    train.add_argument("--seed", type=int, default=2026)
+    train.add_argument("--iterations", type=int)
+    train.add_argument("--seed", type=int)
+    train.add_argument("--terminal-weight", type=float)
+    train.add_argument("--patience", type=int, help="stop after this many validation checks without improvement")
+    train.add_argument("--stop-after", type=int, help="pause at this absolute update count")
+    train.add_argument("--resume", type=Path, help="continue a resume.pt checkpoint with its saved configuration")
+    study = commands.add_parser("training-study", help="compare three fixed seeds and terminal weights 1 and 5")
+    study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/reproducibility"))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss):
         command.add_argument(
@@ -226,13 +232,37 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "training-study":
+            from .problems import vanilla_case
+            from .training_study import TrainingStudy
+
+            result = TrainingStudy(vanilla_case()).run(args.run_dir)
+            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
+                              "resume_check_passed": result["resume_check"]["passed"],
+                              "runs": result["runs"], "summary": result["summary"]},
+                             indent=2, sort_keys=True, allow_nan=False))
+            if result["status"] != "completed":
+                parser.exit(1, "Study incomplete; failed or time-limited runs remain in the report.\n")
+            return
         if args.command == "train":
             from .problems import vanilla_case
-            from .training import TrainingConfig, train_and_save
+            from .training import FBSNNSolver, TrainingConfig, train_and_save
 
-            result = train_and_save(vanilla_case(), TrainingConfig(
-                iterations=args.iterations, seed=args.seed,
-            ), args.run_dir)
+            if args.resume is not None:
+                if any(value is not None for value in (args.iterations, args.seed, args.terminal_weight, args.patience)):
+                    raise ValueError("Resume uses the saved configuration; omit training-configuration flags.")
+                if args.run_dir.exists():
+                    raise FileExistsError(f"Run directory already exists: {args.run_dir}")
+                solver = FBSNNSolver.resume(args.resume)
+                result = solver.fit(stop_after=args.stop_after)
+                solver.save(args.run_dir, result)
+            else:
+                config = {name: value for name, value in (
+                    ("iterations", args.iterations), ("seed", args.seed),
+                    ("terminal_weight", args.terminal_weight), ("patience", args.patience),
+                ) if value is not None}
+                result = train_and_save(vanilla_case(), TrainingConfig(**config),
+                                        args.run_dir, stop_after=args.stop_after)
             print(json.dumps({
                 "run_directory": str(args.run_dir), "status": result["status"],
                 "completed_updates": result["completed_updates"],
