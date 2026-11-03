@@ -106,7 +106,7 @@ class MonteCarloPricer:
         terminal, tau, discount = self._simulate(
             initial_spots, n_paths=n_paths, rng=rng, time=time
         )
-        deterministic = tau == 0 or self.model.volatilities[0] == 0
+        deterministic = tau == 0 or all(sigma == 0 for sigma in self.model.volatilities)
         with np.errstate(over="raise", under="raise", invalid="raise"):
             discounted_payoffs = discount * self.contract.payoff(terminal)
         stats = _statistics(discounted_payoffs, deterministic)

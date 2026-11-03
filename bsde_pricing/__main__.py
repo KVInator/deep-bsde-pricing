@@ -87,6 +87,29 @@ def _finite_difference_summary(
     }
 
 
+def _sampling_summary(args: argparse.Namespace, case: "PricingCase") -> dict[str, object]:
+    import numpy as np
+
+    from .sampling import TerminalSampleDiagnostics
+
+    if args.paths < 2:
+        raise ValueError("Sampling diagnostics require at least two paths.")
+    horizon = case.contract.maturity if args.horizon is None else args.horizon
+    rng = np.random.default_rng(args.seed)
+    terminal = case.model.sample_terminal(case.initial_spots, horizon, args.paths, rng)
+    diagnostics = TerminalSampleDiagnostics.from_sample(
+        case.model, case.initial_spots, horizon, terminal,
+    )
+    return {
+        "method": "exact_correlated_terminal_gbm", "case": case.name,
+        "seed": args.seed, "bit_generator": type(rng.bit_generator).__name__,
+        "dimension": case.model.dimension, "initial_spots": case.initial_spots,
+        "rate": case.model.rate, "dividend_yields": case.model.dividend_yields,
+        "volatilities": case.model.volatilities, "correlation": case.model.correlation,
+        **asdict(diagnostics),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m bsde_pricing")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -96,7 +119,7 @@ def main() -> None:
     describe = commands.add_parser(
         "describe", help="show a pricing case and its financial conventions"
     )
-    describe.add_argument("--case", choices=("vanilla",), default="vanilla")
+    describe.add_argument("--case", choices=("vanilla", "correlated"), default="vanilla")
     reference = commands.add_parser(
         "reference", help="evaluate the analytical price and spot Greeks"
     )
@@ -120,7 +143,12 @@ def main() -> None:
     finite_difference.add_argument("--space-steps", type=int, default=400)
     finite_difference.add_argument("--time-steps", type=int, default=400)
     finite_difference.add_argument("--rannacher-steps", type=int, default=2)
-    for command in (environment, describe, reference, monte_carlo, finite_difference):
+    sample = commands.add_parser("sample", help="check scalar or correlated terminal GBM moments")
+    sample.add_argument("--case", choices=("vanilla", "correlated"), default="correlated")
+    sample.add_argument("--paths", type=int, default=100_000)
+    sample.add_argument("--seed", type=int, default=2026)
+    sample.add_argument("--horizon", type=float, help="simulation horizon in years; default is maturity")
+    for command in (environment, describe, reference, monte_carlo, finite_difference, sample):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -130,26 +158,29 @@ def main() -> None:
         if args.command == "environment":
             report = EnvironmentReport.capture().to_json()
         else:
-            from .problems import vanilla_case
+            from .problems import correlated_case, vanilla_case
 
-            case = vanilla_case()
+            case = correlated_case() if args.case == "correlated" else vanilla_case()
             if args.command == "describe":
                 report = case.to_json()
             else:
-                from .black_scholes import BlackScholesReference
-
-                reference_value = BlackScholesReference(case.model, case.contract).evaluate(
-                    case.initial_spots[0]
-                )
-                if args.command == "reference":
-                    summary = {
-                        "method": "black_scholes", "case": case.name,
-                        **asdict(reference_value),
-                    }
-                elif args.command == "monte-carlo":
-                    summary = _monte_carlo_summary(args, case, reference_value)
+                if args.command == "sample":
+                    summary = _sampling_summary(args, case)
                 else:
-                    summary = _finite_difference_summary(args, case, reference_value)
+                    from .black_scholes import BlackScholesReference
+
+                    reference_value = BlackScholesReference(case.model, case.contract).evaluate(
+                        case.initial_spots[0]
+                    )
+                    if args.command == "reference":
+                        summary = {
+                            "method": "black_scholes", "case": case.name,
+                            **asdict(reference_value),
+                        }
+                    elif args.command == "monte-carlo":
+                        summary = _monte_carlo_summary(args, case, reference_value)
+                    else:
+                        summary = _finite_difference_summary(args, case, reference_value)
                 report = json.dumps(
                     summary, indent=2, sort_keys=True, allow_nan=False,
                 )

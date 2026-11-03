@@ -156,7 +156,7 @@ Reproduction: `python -m bsde_pricing reference --case vanilla`. These are analy
 
 ## Exact-terminal Monte Carlo
 
-The terminal distribution derived above permits direct sampling for a European payoff. `GBMModel.sample_terminal(initial_spots, horizon, n_paths, rng)` initially implements the one-asset law and returns shape $(N,1)$. Each stochastic terminal sample uses one independent standard normal draw. There is no forward time grid or Euler approximation. `MonteCarloPricer` calls that model method and the existing contract payoff; its estimator does not call the analytical pricing engine.
+The terminal distribution derived above permits direct sampling for a European payoff. `GBMModel.sample_terminal(initial_spots, horizon, n_paths, rng)` returns exact joint terminal states of shape $(N,d)$. In one dimension each stochastic sample uses one standard normal draw; the correlated extension below specifies the vector transform. There is no forward time grid or Euler approximation. `MonteCarloPricer` calls that model method and the existing contract payoff; its estimator does not call the analytical pricing engine.
 
 For independent discounted payoff samples
 
@@ -411,3 +411,105 @@ python -m unittest discover -s tests -v
 ```
 
 The classical-reference notebook retains the plots and tables for these studies and runs them using the same core classes.
+
+## Correlated terminal GBM
+
+### Brownian dependence and exact transitions
+
+For $d$ assets, the constant-parameter risk-neutral model is
+
+$$
+\frac{dS_i}{S_i}=(r-q_i)\,dt+\sigma_i\,dW_i,
+\qquad d\langle W_i,W_j\rangle_t=\rho_{ij}\,dt.
+$$
+
+Correlation specifies the joint shocks; each marginal still follows its own GBM law. Itô's formula applied to $\log S_i$ yields the drift correction $-\sigma_i^2/2$. Over a horizon $\tau$,
+
+$$
+S_i(t+\tau)=S_i(t)\exp\left((r-q_i-\tfrac12\sigma_i^2)\tau
++\sigma_i\sqrt\tau\,Y_i\right),\qquad Y\sim N(0,\rho).
+$$
+
+The existing model method `GBMModel.sample_terminal()` implements this joint transition. It does not introduce a forward time grid. Outputs have shape `(n_paths, dimension)` with independent rows and dependent asset columns. All calculations use NumPy float64 on CPU. A seed determines the stream in a given numerical environment; cross-platform bitwise identity is not assumed.
+
+### Cholesky orientation and random streams
+
+For the lower Cholesky factor $\rho=LL^\top$ and an independent standard-normal column vector $z$, define $Y=Lz$. Then
+
+$$\operatorname{Cov}(Y)=L I L^\top=\rho.$$
+
+The implementation stores paths as rows, so the transform is `Z @ L.T`, followed by column-wise multiplication by $\sigma_i\sqrt\tau$. Using `Z @ L` instead would target $L^\top L$, which generally has different variances and covariances. NumPy's [Cholesky documentation](https://numpy.org/doc/stable/reference/generated/numpy.linalg.cholesky.html) defines the lower-triangular factor used here.
+
+The three-asset fixture uses
+
+$$
+\rho=\begin{pmatrix}1&0.6&-0.2\\0.6&1&0.3\\-0.2&0.3&1\end{pmatrix},
+\qquad
+L=\begin{pmatrix}1&0&0\\0.6&0.8&0\\-0.2&0.525&\sqrt{0.684375}\end{pmatrix}.
+$$
+
+A fixed-shock test computes these three linear combinations explicitly, independently of the production factorisation. Separate empirical moment checks then assess the generated distribution. Unequal volatilities and a negative pair correlation help expose asset-order and scaling mistakes.
+
+One-dimensional sampling skips the matrix multiplication and retains the original arithmetic order and `(N,1)` normal draw shape. A regression test compares its states exactly with the earlier scalar transition. Zero horizon returns the initial spots exactly and consumes no random draws. An entirely zero-volatility model also consumes none. If only some volatilities are zero, the model draws a full `(N,d)` normal array, correlates it, and applies each coordinate's volatility. The zero-volatility coordinates are deterministic; stochastic neighbours still contribute price uncertainty. `MonteCarloPricer.estimate()` therefore classifies a positive-horizon basket as deterministic only when all coordinate volatilities are zero.
+
+The correlation contract remains symmetric, unit diagonal and positive definite. Negative pair correlations are allowed if the whole matrix satisfies that condition. Singular perfect-correlation cases are rejected; the implementation does not silently repair matrices or choose a different factorisation. Near-singular valid matrices can amplify numerical sensitivity and require their own checks.
+
+### Distribution diagnostics and their error scale
+
+For $X_i=\log(S_i(t+\tau)/S_i(t))$,
+
+$$
+\mu_i=(r-q_i-\tfrac12\sigma_i^2)\tau,
+\qquad \Sigma_{ij}=\sigma_i\sigma_j\rho_{ij}\tau.
+$$
+
+`TerminalSampleDiagnostics.from_sample()` compares theoretical moments with the supplied sample. It validates the state shape, strictly positive spots and at least two paths. Log returns are computed as a difference of logs to avoid overflow in the intermediate price ratio. The sample mean has theoretical standard error
+
+$$\operatorname{SE}(\bar X_i)=\sqrt{\Sigma_{ii}/N}.$$
+
+For the unbiased sample covariance with denominator $N-1$, the Gaussian identity is
+
+$$
+\operatorname{Var}(\widehat\Sigma_{ij})
+=\frac{\Sigma_{ii}\Sigma_{jj}+\Sigma_{ij}^2}{N-1}.
+$$
+
+This follows by writing $(N-1)\widehat\Sigma$ as a sum of $N-1$ independent centered Gaussian outer products and using the fourth-moment relation $\mathbb E[X_i^2X_j^2]=\Sigma_{ii}\Sigma_{jj}+2\Sigma_{ij}^2$. Covariance entries are dependent. Individual standard errors are useful diagnostics, not a simultaneous confidence band for the full matrix. Zero-volatility or zero-horizon entries have zero theoretical sampling error, so a standardised residual for those entries is undefined; the report retains raw moments and standard errors without dividing by zero.
+
+The terminal mean and its standard error follow from the marginal lognormal distribution:
+
+$$
+m_i=\mathbb E[S_i(t+\tau)]=S_i(t)e^{(r-q_i)\tau},
+\qquad
+\operatorname{SE}(\bar S_i)
+=m_i\sqrt{\frac{e^{\sigma_i^2\tau}-1}{N}}.
+$$
+
+For positive volatilities and horizon, log-return correlation equals $\rho$. Pearson correlation of terminal spot levels generally differs because of exponentiation. Changing correlation leaves theoretical marginal distributions unchanged, while altering joint events and basket distributions. Matched seeds across correlation scenarios induce dependence between numerical estimates; they do not guarantee identical finite-sample marginal means.
+
+### Implemented example and scope
+
+`correlated_case()` defines spots $(80,100,120)$, volatilities $(0.15,0.25,0.35)$, dividend yields $(0,0.01,0.02)$, rate 0.03, maturity one year and the correlation above. Its arithmetic-call contract has strike 100 and weights $(0.2,0.3,0.5)$. Those weights do not enter the state-distribution diagnostics.
+
+At one year, the target log-return mean is $(0.01875,-0.01125,-0.05125)$ and covariance is
+
+$$
+\Sigma=\begin{pmatrix}
+0.0225&0.0225&-0.0105\\
+0.0225&0.0625&0.02625\\
+-0.0105&0.02625&0.1225
+\end{pmatrix}.
+$$
+
+With 100,000 paths and seed 2026, the observed log-return means are approximately $(0.01851113,-0.01013352,-0.04985481)$. Their errors are approximately $(-0.504,1.412,1.261)$ theoretical standard errors. The notebook retains full covariance diagnostics, marginal checks, standardised scatter plots and a two-asset correlation sweep from -0.5 to 0.9. These checks support the state sampler; they do not establish basket-option price or delta accuracy.
+
+```bash
+python -m bsde_pricing describe --case correlated
+python -m bsde_pricing sample --case correlated --paths 100000 --seed 2026 --output scratch/correlated_terminal.json
+python -m bsde_pricing sample --case vanilla --paths 100000 --seed 2026
+python -m unittest discover -s tests -v
+```
+
+The sampling report records seed, generator, financial inputs, horizon, theoretical moments, observed moments and theoretical sampling standard errors. It retains summary statistics rather than writing all paths into JSON. The sampler stores $O(Nd)$ numbers, with a dense $O(d^3)$ factorisation and $O(Nd^2)$ correlation transform; memory and runtime still need pilots before high-dimensional experiments.
+
+The basket notebook begins with state validation. Closed-form geometric-basket prices and coordinate deltas will supply the next independent reference. Multivariate path grids, basket deltas, strong arithmetic-basket references and neural solvers remain separate work.

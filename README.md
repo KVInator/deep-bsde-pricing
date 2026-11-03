@@ -2,7 +2,7 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, and a one-dimensional finite-difference PDE reference. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
+The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, and correlated multi-asset terminal sampling with moment diagnostics. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
 
 ## Environment
 
@@ -53,7 +53,7 @@ The reference handles expiry and zero volatility explicitly. Classical Greeks at
 python -m bsde_pricing monte-carlo --case vanilla --paths 100000 --seed 2026 --output scratch/vanilla_mc.json
 ```
 
-The command samples the terminal GBM state directly, applies the existing payoff and reports its discounted sample mean, standard error and approximate 95% confidence interval. The current sampler supports one asset. Its output retains the seed, generator type, number of positive payoffs and comparison with the separate analytical reference.
+The command samples the terminal GBM state directly, applies the existing payoff and reports its discounted sample mean, standard error and approximate 95% confidence interval. The sampler supports correlated assets; this CLI price comparison remains the vanilla case. Its output retains the seed, generator type, number of positive payoffs and comparison with the separate analytical reference.
 
 For 100,000 samples with seed 2026, the base-case estimate is **9.38965721**, with standard error **0.04441069** and approximate interval **[9.30261386, 9.47670057]**. The analytical value is **9.41340338**. These are seeded simulation results; a new seed changes the estimate and interval.
 
@@ -78,9 +78,20 @@ The scalar call solver uses a uniform spot grid, Crank–Nicolson and four backw
 
 For the base case, the PDE price is **9.41095007**, delta **0.59865223**, and gamma **0.01934023**. The price error is **−0.00245331**; doubling both grids to 800 reduces it to **−0.00061312**. The notebook separates spot, time and upper-boundary refinement and shows the gamma oscillations produced by plain Crank–Nicolson on a coarse time grid. Full equations, scope and error checks are in the [methodology](docs/methodology.md#finite-difference-reference).
 
+## Correlated terminal simulation
+
+```bash
+python -m bsde_pricing describe --case correlated
+python -m bsde_pricing sample --case correlated --paths 100000 --seed 2026 --output scratch/correlated_terminal.json
+```
+
+The three-asset example uses unequal spots, volatilities and dividends, with both positive and negative pair correlations. A Cholesky transform produces joint normal shocks for exact GBM terminal transitions. The report compares observed log-return means/covariances and terminal spot means with theoretical values and their sampling standard errors. The scalar transition retains its original seeded stream and calculation order.
+
+[Basket references](notebooks/02_basket_references.ipynb) begins with these distribution checks, covariance heatmaps, pairwise scatter plots and a correlation sweep. The [methodology](docs/methodology.md#correlated-terminal-gbm) explains the matrix orientation, uncertainty formulas and deterministic limits. The current basket experiments validate simulated states; basket-option reference prices and coordinate deltas are subsequent calculations.
+
 ## Notebook exploration
 
-Open [Classical references](notebooks/01_classical_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.
+Open [Classical references](notebooks/01_classical_references.ipynb) or [Basket references](notebooks/02_basket_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.
 
 For an existing environment, install and register the notebook kernel:
 

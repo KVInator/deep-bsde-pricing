@@ -72,12 +72,15 @@ class GBMModel:
         self, initial_spots: ArrayLike, horizon: float, n_paths: int,
         rng: np.random.Generator,
     ) -> NDArray[np.float64]:
-        """Draw exact terminal states of shape (n_paths, 1) for the scalar model."""
-        if self.dimension != 1:
-            raise NotImplementedError("Terminal sampling currently supports one asset.")
+        """Draw exact terminal states of shape (n_paths, dimension).
+
+        Rows are independent paths; columns retain the model's asset order.
+        Mixed deterministic/stochastic models draw normals for all columns.
+        Zero horizon or an entirely deterministic model consumes no normals.
+        """
         spots = _finite_vector(initial_spots, "initial_spots")
-        if len(spots) != 1 or spots[0] <= 0:
-            raise ValueError("initial_spots must contain one strictly positive spot.")
+        if len(spots) != self.dimension or any(spot <= 0 for spot in spots):
+            raise ValueError("initial_spots must be positive and match the model dimension.")
         horizon = float(horizon)
         if not math.isfinite(horizon) or horizon < 0:
             raise ValueError("horizon must be finite and nonnegative.")
@@ -88,19 +91,26 @@ class GBMModel:
             raise ValueError("n_paths must be a positive integer.")
         n_paths = int(n_paths)
         if horizon == 0:
-            return np.full((n_paths, 1), spots[0], dtype=np.float64)
+            return np.broadcast_to(spots, (n_paths, self.dimension)).copy()
 
-        sigma = self.volatilities[0]
-        deviation = sigma * math.sqrt(horizon)
-        variance = deviation * deviation
-        drift = (self.rate - self.dividend_yields[0]) * horizon - 0.5 * variance
-        if not math.isfinite(variance) or not math.isfinite(drift):
-            raise ValueError("Integrated model parameters exceed floating-point range.")
-        if sigma > 0 and variance == 0:
+        sigma = np.asarray(self.volatilities)
+        with np.errstate(over="raise", invalid="raise"):
+            deviation = sigma * math.sqrt(horizon)
+            variance = deviation * deviation
+            drift = (self.rate - np.asarray(self.dividend_yields)) * horizon - 0.5 * variance
+        if np.any((sigma > 0) & (variance == 0)):
             raise ValueError("Integrated variance is below floating-point resolution.")
-        log_spots = np.full((n_paths, 1), math.log(spots[0]) + drift)
-        if sigma > 0:
-            log_spots += deviation * rng.standard_normal((n_paths, 1))
+        log_spots = np.broadcast_to(
+            np.array([math.log(spot) for spot in spots]) + drift,
+            (n_paths, self.dimension),
+        ).copy()
+        if np.any(sigma > 0):
+            normals = rng.standard_normal((n_paths, self.dimension))
+            if self.dimension > 1:
+                # Row-vector paths require L.T: Cov(L z) = L L.T = rho.
+                normals = normals @ np.linalg.cholesky(self.correlation).T
+            with np.errstate(over="raise", invalid="raise"):
+                log_spots += deviation * normals
         with np.errstate(over="raise", under="raise", invalid="raise"):
             return np.exp(log_spots)
 
@@ -195,4 +205,18 @@ def vanilla_case() -> PricingCase:
         ),
         contract=EuropeanCall(strike=100.0, maturity=1.0),
         initial_spots=(100.0,),
+    )
+
+
+def correlated_case() -> PricingCase:
+    """Three unequal assets with positive and negative pair correlations."""
+    return PricingCase(
+        name="correlated",
+        model=GBMModel(
+            rate=0.03, volatilities=(0.15, 0.25, 0.35),
+            dividend_yields=(0.0, 0.01, 0.02),
+            correlation=((1.0, 0.6, -0.2), (0.6, 1.0, 0.3), (-0.2, 0.3, 1.0)),
+        ),
+        contract=EuropeanCall(100.0, 1.0, weights=(0.2, 0.3, 0.5)),
+        initial_spots=(80.0, 100.0, 120.0),
     )
