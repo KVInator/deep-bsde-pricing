@@ -122,6 +122,18 @@ def _sampling_summary(args: argparse.Namespace, case: "PricingCase") -> dict[str
     }
 
 
+def _basket_reference_summary(args: argparse.Namespace, case: "PricingCase") -> dict[str, object]:
+    from .basket_reference import BasketReferencePricer
+
+    pricer = BasketReferencePricer(case.model, case.contract)
+    common = {"pilot_pairs": args.pilot_pairs, "seed": args.seed}
+    if args.method == "antithetic":
+        result = pricer.antithetic(case.initial_spots, n_pairs=args.pairs, **common)
+    else:
+        result = pricer.sobol(case.initial_spots, power=args.power, scrambles=args.scrambles, **common)
+    return {"case": case.name, "problem": json.loads(case.to_json()), **asdict(result)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m bsde_pricing")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -162,7 +174,15 @@ def main() -> None:
     sample.add_argument("--paths", type=int, default=100_000)
     sample.add_argument("--seed", type=int, default=2026)
     sample.add_argument("--horizon", type=float, help="simulation horizon in years; default is maturity")
-    for command in (environment, describe, reference, monte_carlo, finite_difference, sample):
+    basket_reference = commands.add_parser("basket-reference", help="estimate basket price and deltas with geometric controls")
+    basket_reference.add_argument("--case", choices=("correlated", "geometric", "vanilla"), default="correlated")
+    basket_reference.add_argument("--method", choices=("antithetic", "sobol"), default="sobol")
+    basket_reference.add_argument("--pairs", type=int, default=65_536)
+    basket_reference.add_argument("--power", type=int, default=13)
+    basket_reference.add_argument("--scrambles", type=int, default=16)
+    basket_reference.add_argument("--pilot-pairs", type=int, default=4096)
+    basket_reference.add_argument("--seed", type=int, default=2026)
+    for command in (environment, describe, reference, monte_carlo, finite_difference, sample, basket_reference):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -181,6 +201,8 @@ def main() -> None:
             else:
                 if args.command == "sample":
                     summary = _sampling_summary(args, case)
+                elif args.command == "basket-reference":
+                    summary = _basket_reference_summary(args, case)
                 else:
                     from .black_scholes import BlackScholesReference
                     from .geometric_basket import GeometricBasketReference

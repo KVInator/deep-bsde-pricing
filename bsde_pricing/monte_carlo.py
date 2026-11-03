@@ -20,7 +20,9 @@ class EstimateStatistics:
     confidence_high: float | None
 
 
-def _statistics(samples: NDArray[np.float64], deterministic: bool) -> EstimateStatistics:
+def _statistics(
+    samples: NDArray[np.float64], deterministic: bool, *, critical_value: float | None = None,
+) -> EstimateStatistics:
     with np.errstate(over="raise", under="raise", invalid="raise"):
         mean = float(samples[0]) if deterministic else float(samples.mean())
         sample_std = 0.0 if deterministic else float(samples.std(ddof=1))
@@ -30,7 +32,8 @@ def _statistics(samples: NDArray[np.float64], deterministic: bool) -> EstimateSt
     elif standard_error == 0:
         lower = upper = None
     else:
-        half_width = NormalDist().inv_cdf(0.975) * standard_error
+        critical = NormalDist().inv_cdf(0.975) if critical_value is None else critical_value
+        half_width = critical * standard_error
         lower, upper = mean - half_width, mean + half_width
     return EstimateStatistics(
         estimate=mean,

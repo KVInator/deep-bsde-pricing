@@ -512,7 +512,7 @@ python -m unittest discover -s tests -v
 
 The sampling report records seed, generator, financial inputs, horizon, theoretical moments, observed moments and theoretical sampling standard errors. It retains summary statistics rather than writing all paths into JSON. The sampler stores $O(Nd)$ numbers, with a dense $O(d^3)$ factorisation and $O(Nd^2)$ correlation transform; memory and runtime still need pilots before high-dimensional experiments.
 
-The basket notebook begins with state validation. The geometric-basket reference below supplies analytical prices and coordinate deltas. Multivariate path grids, arithmetic-basket deltas, strong arithmetic-basket references and neural solvers remain separate work.
+The basket notebook begins with state validation. The geometric-basket reference below supplies analytical prices and coordinate deltas. Multivariate path grids and neural solvers remain separate work; the arithmetic reference below supplies price and delta estimates.
 
 ## Geometric-basket reference
 
@@ -619,4 +619,91 @@ python -m bsde_pricing monte-carlo --case geometric --quantity delta --coordinat
 python -m unittest discover -s tests -v
 ```
 
-The basket notebook adds analytical/simulation comparisons, one-coordinate spot changes, equicorrelation scenarios and paired bump-size diagnostics. Its pricing maturity follows the editable simulation horizon. The geometric basket remains an analytically reducible control case at high dimension. These results do not establish a neural speed advantage or supply a general arithmetic-basket closed form; the arithmetic reference is the next separate calculation.
+The basket notebook adds analytical/simulation comparisons, one-coordinate spot changes, equicorrelation scenarios and paired bump-size diagnostics. Its pricing maturity follows the editable simulation horizon. The geometric basket remains an analytically reducible control case at high dimension. These results do not establish a neural speed advantage or supply a general arithmetic-basket closed form; the arithmetic reference is developed below.
+
+## Arithmetic-basket numerical reference
+
+### Targets, pathwise deltas and price bounds
+
+The arithmetic contract pays $(A_T-K)^+$ with $A_T=\sum_iw_iS_i(T)$. Its price is the discounted expectation under the same exact joint GBM transition. A weighted sum of correlated lognormal variables does not in general have a lognormal distribution. The reference therefore estimates price and all coordinate deltas numerically rather than applying the geometric closed form to $A$.
+
+For strictly positive remaining variance, the pathwise contribution for coordinate $k$ is
+
+$$D_{n,k}=e^{-r\tau}\mathbf1_{A_T^{(n)}>K}\,w_k\frac{S_k^{(n)}(T)}{S_k(0)}.$$
+
+The code evaluates price and the full gradient on the same paths. Their errors are dependent. Mixed zero-volatility coordinates are allowed when at least one asset remains stochastic. Expiry and entirely deterministic models are rejected by this reference interface; their pricing limits remain available through earlier interfaces. The payoff kink has zero probability under the supported stochastic model.
+
+For positive weights with exactly unit sum, the geometric mean and convexity give price bounds
+
+$$C_G\le C_A\le\sum_iw_i C_i(S_i,K),$$
+
+where each scalar call has the same strike, rate, maturity and its asset's volatility/dividend yield. These bounds constrain prices, not coordinate-delta ordering. The report supplies them only when the floating-point weight sum is exactly one; otherwise the fields are `null`. Estimates are retained without clipping to the bounds.
+
+### Geometric controls and separate pilot fitting
+
+Let $X$ collect the discounted arithmetic payoff and its pathwise delta contributions, and let $Y$ collect the corresponding geometric quantities. Their known expectation vector $\mu_Y$ comes from the analytical geometric reference. Price and each delta are separate expectation estimators; controlled deltas are not obtained by differentiating a fitted price estimate. Each component has a separately fitted coefficient:
+
+$$\widehat X_j=X_j-\widehat\beta_j(Y_j-\mu_{Y,j}),
+\qquad\beta_j^*=\frac{\operatorname{Cov}(X_j,Y_j)}{\operatorname{Var}(Y_j)}.$$
+
+The pilot contains independent antithetic pair averages and is separate from every evaluation stream. The implementation estimates the covariance/variance ratio on those pilot units. Conditional on the pilot, $\widehat\beta$ is fixed and the evaluation expectation remains $\mathbb E[X]$. Thus fitting does not introduce the same-sample coefficient bias. Pilot cost is included in total terminal-state count and measured runtime. There is no claim that a short pilot discovers the optimal coefficient accurately.
+
+If a pilot control has zero observed variance, the corresponding coefficient is set to zero and its index appears in `unfitted_controls`. This retains an unadjusted estimate instead of dividing by zero or claiming known variance. Index zero is price; following indices correspond to asset deltas. Negative or unhelpful fitted coefficients are not clipped. Zero observed evaluation variance withholds confidence bounds, as in the existing Monte Carlo statistics contract.
+
+For IID evaluation pairs, the conditional residual variance determines the price/delta uncertainty. No extra unconditional pilot-variance term is needed because the conditional estimator mean is the same for every pilot. For Sobol evaluation, an IID-pair pilot coefficient need not minimise variance across scramble means. Controls can therefore worsen Sobol uncertainty, especially for discontinuous Greek contributions. Both plain and controlled results are always retained.
+
+### Antithetic sampling units
+
+For an independent normal vector $Z_n$, calculate terminal states under both $Z_n$ and $-Z_n$ and average each contribution:
+
+$$X_n^{\mathrm{pair}}=\tfrac12(X(Z_n)+X(-Z_n)).$$
+
+With $M$ pairs, there are $2M$ terminal states but only $M$ independent sampling units. Pilot fitting and evaluation statistics both use pair averages. Treating the legs as IID would omit their covariance and misstate uncertainty. The reported sample standard deviation is the standard deviation of pair contributions; standard error divides it by $\sqrt M$. Intervals use the existing normal-approximation multiplier.
+
+`GBMModel.terminal_from_normals()` exposes the same transition kernel used by ordinary IID sampling. Antithetic and inverse-normal Sobol calculations therefore do not maintain separate GBM implementations. The supplied normal array has shape `(N,d)`, contains independent-coordinate shocks before correlation, and is not mutated. Existing scalar draws and seeded results are retained.
+
+### Randomised Sobol sampling and uncertainty
+
+Each evaluation replication uses a fresh SciPy Sobol engine with LMS+shift scrambling, 52 bits and no point optimisation. `random_base2(m)` generates a full $2^m$-point net without discarding initial points or thinning. Independent-coordinate normals are obtained with the inverse standard-normal CDF, then passed to the common transition kernel. Exact endpoints zero or one raise an error rather than receiving a silent tail clip.
+
+Points within a net are dependent. For $R$ independent scrambles, first compute a price/gradient mean $\bar X_r$ for each complete net. The estimator and standard error are
+
+$$\widehat\mu=\frac1R\sum_{r=1}^R\bar X_r,
+\qquad\widehat{\mathrm{SE}}=\frac{s_{\bar X}}{\sqrt R}.$$
+
+The approximate pointwise 95% interval uses $t_{R-1,0.975}\widehat{\mathrm{SE}}$. The report's sample standard deviation is the dispersion of **scramble means**, and `n_units` is $R$, not the total number of Sobol points. Scramble means are retained in the result for inspection. At least four independent scrambles are required; the default is 16. This is an uncertainty approximation, not a guaranteed error bound or simultaneous gradient band.
+
+SciPy documents the [Sobol balance and scrambling requirements](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.qmc.Sobol.html) and [independent RQMC replications](https://docs.scipy.org/doc/scipy/reference/stats.qmc.html). The antithetic and control-variate principles are developed in the [Monte Carlo chapter of Pricing and Hedging Derivative Securities](https://book.derivative-securities.org/Chapter_MonteCarlo.html).
+
+### Random streams, scope and computing cost
+
+`BasketReferencePricer.antithetic()` uses `SeedSequence(seed, spawn_key=(0,))`, while `.sobol()` uses branch `(1,)`. Within each branch, spawned child zero supplies the pilot; remaining children supply evaluation. The methods therefore use disjoint branches and separate pilots. Repeatability requires the recorded numerical environment as well as the seed; identity across SciPy releases or platforms is not promised.
+
+For pilot size $P$ pairs, evaluation size $M$ antithetic pairs costs $2P+2M$ terminal states. Sobol with $R$ scrambles and $2^m$ points costs $2P+R2^m$. Both arithmetic and geometric quantities are computed on each state. Runtime includes pilot fitting, analytical control expectations, both plain and controlled estimates and uncertainty calculations. No isolated plain-estimator runtime is measured. Arrays for one pair block or one scramble are held in memory, along with contribution arrays; memory scales with the chosen point/pair count and dimension. Scrambles are processed sequentially. The API validates integer allocations and caps net power at 30, but this is a generator bound, not a promise that such a net fits the MacBook. High-dimensional allocations require a separate memory/runtime pilot.
+
+The geometric contract is also accepted for calibration of this machinery against its closed form. That reducible case does not supply an independent arithmetic price. Arithmetic delta tests instead compare pathwise contributions with selected-spot repricing on matched scrambled nets and use paired differences to measure discrepancy.
+
+### Precision targets and retained findings
+
+The notebook declares approximate 95% half-width targets of **0.005 price units** and **0.0005 for every coordinate delta**. These are statistical precision targets, not bounds on realised error. The initial matched-work comparison uses 65,536 evaluation pairs versus 16 scrambles of 8,192 points, with 4,096 pilot pairs for each method. Both spend 139,264 terminal states including the pilot.
+
+For seed 2026, the controlled antithetic price is **13.337587776547**, with standard error **0.009102652276** and half-width about **0.01784**, which fails the price target. The controlled Sobol price is **13.356213457973**, with standard error **0.000519348009** and half-width about **0.001107**. Their discrepancy is approximately 2.04 combined standard errors. This initial result is retained rather than replaced or interpreted as a deterministic pricing discrepancy. The geometric control substantially reduces antithetic price variance, while some Sobol delta standard errors increase relative to plain Sobol. The fitted IID-pair control is not automatically an effective Sobol control.
+
+A larger antithetic allocation of $2^{20}$ pairs is chosen from the measured standard error to meet the price target, with a fixed confirmation seed of 2027. The independent Sobol confirmation uses 16 scrambles of $2^{14}$ points. No further allocation or seed search is performed based on agreement. The controlled confirmation results are:
+
+| Quantity | Antithetic estimate | Antithetic SE | Sobol estimate | Sobol SE |
+| --- | ---: | ---: | ---: | ---: |
+| Price | 13.35403144 | 0.00229101 | 13.35667441 | 0.00028312 |
+| Asset 1 delta | 0.11627125 | 0.00003269 | 0.11618548 | 0.00004403 |
+| Asset 2 delta | 0.18880762 | 0.00004607 | 0.18870710 | 0.00007094 |
+| Asset 3 delta | 0.33951911 | 0.00006934 | 0.33953367 | 0.00012312 |
+
+Both meet the declared half-width targets, with confirmation-method discrepancies below 1.6 combined standard errors for all four quantities. Arithmetic price bounds are approximately **[10.80584305, 17.03503764]**. The notebook additionally retains three-seed allocation comparisons and complete-call timings. Those small studies do not establish confidence-interval coverage or a universal speedup. Confirmation allocations differ in order to reach adequate precision; their runtime is not an equal-work comparison.
+
+```bash
+python -m bsde_pricing basket-reference --case correlated --method antithetic --pairs 1048576 --seed 2027 --output scratch/arithmetic_antithetic.json
+python -m bsde_pricing basket-reference --case correlated --method sobol --power 14 --scrambles 16 --seed 2027 --output scratch/arithmetic_sobol.json
+python -m unittest discover -s tests -v
+```
+
+The `correlated` case is the asymmetric arithmetic basket defined earlier. Reports include the financial problem, seed branch, allocations, uncertainty unit, pilot coefficients, missing-variance indices, plain/controlled results, available bounds and Sobol replication means. Unbiasedness statements refer to the ideal sampling model; finite-precision random-number generation and inverse-CDF transformation remain numerical approximations. The final reference remains numerical and carries its estimated uncertainty. Later learned-solver comparisons must preserve that distinction.

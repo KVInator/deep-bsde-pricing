@@ -2,7 +2,7 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, correlated multi-asset terminal sampling with moment diagnostics, and an exact geometric-basket price and coordinate-delta reference. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
+The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, correlated multi-asset terminal sampling with moment diagnostics, an exact geometric-basket price and coordinate-delta reference, and arithmetic-basket references with geometric controls and scrambled Sobol sampling. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
 
 ## Environment
 
@@ -102,6 +102,19 @@ The weighted geometric basket is lognormal under the correlated GBM model. Its e
 For the asymmetric three-asset case with weights 0.2, 0.3 and 0.5, the call price is **10.80584305** and coordinate deltas are **(0.15794784, 0.18953741, 0.26324641)**. With 100,000 paths and seed 2026, the Monte Carlo price is **10.85409388** with estimated standard error **0.05001722**. The zero-based `--coordinate` selects the starting spot for a pathwise/common-random-number bump comparison. Full formulas, numerical limits and independent checks are in the [methodology](docs/methodology.md#geometric-basket-reference).
 
 The basket notebook now includes these price/delta checks, selected-spot and correlation sensitivities, and paired bump diagnostics. Its geometric contract maturity follows the editable simulation horizon.
+
+## Arithmetic-basket numerical reference
+
+```bash
+python -m bsde_pricing basket-reference --case correlated --method antithetic --pairs 1048576 --seed 2027 --output scratch/arithmetic_antithetic.json
+python -m bsde_pricing basket-reference --case correlated --method sobol --power 14 --scrambles 16 --seed 2027 --output scratch/arithmetic_sobol.json
+```
+
+The reference estimates the asymmetric arithmetic call price and all coordinate deltas. A separate pilot fits geometric-payoff and geometric-delta control coefficients. Antithetic uncertainty uses pair averages; Sobol uncertainty uses independent scramble means and a Student-t interval. Plain and controlled results remain visible, including cases where the control increases measured uncertainty.
+
+For seed 2027, the controlled price estimates are **13.35403144** (antithetic SE **0.00229101**) and **13.35667441** (Sobol SE **0.00028312**). Both confirmation methods meet the notebook's approximate 95% half-width targets of 0.005 price units and 0.0005 per delta. These are numerical estimates with sampling uncertainty. The [methodology](docs/methodology.md#arithmetic-basket-numerical-reference) records the initial under-resolved run, independent confirmation, estimator formulas, bounds and computing limits.
+
+Basket-notebook sections 11-14 retain matched-work comparisons, independent confirmation, sample-allocation/seed variation and complete-call timings. Runtime measurements apply to the execution environment recorded in the notebook.
 
 ## Notebook exploration
 

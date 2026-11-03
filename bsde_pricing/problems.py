@@ -78,21 +78,42 @@ class GBMModel:
         Mixed deterministic/stochastic models draw normals for all columns.
         Zero horizon or an entirely deterministic model consumes no normals.
         """
-        spots = _finite_vector(initial_spots, "initial_spots")
-        if len(spots) != self.dimension or any(spot <= 0 for spot in spots):
-            raise ValueError("initial_spots must be positive and match the model dimension.")
-        horizon = float(horizon)
-        if not math.isfinite(horizon) or horizon < 0:
-            raise ValueError("horizon must be finite and nonnegative.")
+        spots, horizon, deviation, drift = self._terminal_parameters(initial_spots, horizon)
         if (
             isinstance(n_paths, (bool, np.bool_))
             or not isinstance(n_paths, (int, np.integer)) or n_paths < 1
         ):
             raise ValueError("n_paths must be a positive integer.")
         n_paths = int(n_paths)
-        if horizon == 0:
-            return np.broadcast_to(spots, (n_paths, self.dimension)).copy()
+        normals = (rng.standard_normal((n_paths, self.dimension))
+                   if horizon > 0 and np.any(deviation > 0) else None)
+        return self._terminal_states(spots, horizon, deviation, drift, n_paths, normals)
 
+    def terminal_from_normals(
+        self, initial_spots: ArrayLike, horizon: float, independent_normals: ArrayLike,
+    ) -> NDArray[np.float64]:
+        """Map independent normal rows (N, d) through the same exact transition.
+
+        The input is not modified. This entry point permits paired shocks and
+        inverse-normal Sobol points without maintaining another GBM formula.
+        """
+        spots, horizon, deviation, drift = self._terminal_parameters(initial_spots, horizon)
+        normals = _finite_array(independent_normals, "independent_normals")
+        if normals.ndim != 2 or normals.shape[1] != self.dimension or len(normals) < 1:
+            raise ValueError("independent_normals must have shape (N >= 1, dimension).")
+        return self._terminal_states(spots, horizon, deviation, drift, len(normals), normals)
+
+    def _terminal_parameters(
+        self, initial_spots: ArrayLike, horizon: float,
+    ) -> tuple[tuple[float, ...], float, NDArray[np.float64], NDArray[np.float64]]:
+        spots = _finite_vector(initial_spots, "initial_spots")
+        if len(spots) != self.dimension or any(spot <= 0 for spot in spots):
+            raise ValueError("initial_spots must be positive and match the model dimension.")
+        horizon = float(horizon)
+        if not math.isfinite(horizon) or horizon < 0:
+            raise ValueError("horizon must be finite and nonnegative.")
+        if horizon == 0:
+            return spots, horizon, np.zeros(self.dimension), np.zeros(self.dimension)
         sigma = np.asarray(self.volatilities)
         with np.errstate(over="raise", invalid="raise"):
             deviation = sigma * math.sqrt(horizon)
@@ -100,12 +121,20 @@ class GBMModel:
             drift = (self.rate - np.asarray(self.dividend_yields)) * horizon - 0.5 * variance
         if np.any((sigma > 0) & (variance == 0)):
             raise ValueError("Integrated variance is below floating-point resolution.")
+        return spots, horizon, deviation, drift
+
+    def _terminal_states(
+        self, spots: tuple[float, ...], horizon: float,
+        deviation: NDArray[np.float64], drift: NDArray[np.float64],
+        n_paths: int, normals: NDArray[np.float64] | None,
+    ) -> NDArray[np.float64]:
+        if horizon == 0:
+            return np.broadcast_to(spots, (n_paths, self.dimension)).copy()
         log_spots = np.broadcast_to(
             np.array([math.log(spot) for spot in spots]) + drift,
             (n_paths, self.dimension),
         ).copy()
-        if np.any(sigma > 0):
-            normals = rng.standard_normal((n_paths, self.dimension))
+        if normals is not None and np.any(deviation > 0):
             if self.dimension > 1:
                 # Row-vector paths require L.T: Cov(L z) = L L.T = rho.
                 normals = normals @ np.linalg.cholesky(self.correlation).T
