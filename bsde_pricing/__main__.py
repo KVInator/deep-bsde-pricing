@@ -224,6 +224,11 @@ def main() -> None:
     train.add_argument("--resume", type=Path, help="continue a resume.pt checkpoint with its saved configuration")
     study = commands.add_parser("training-study", help="compare three fixed seeds and terminal weights 1 and 5")
     study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/reproducibility"))
+    terminal_train = commands.add_parser("train-terminal", help="fit the scalar terminal-loss Deep BSDE solver")
+    terminal_train.add_argument("--case", choices=("vanilla",), default="vanilla")
+    terminal_train.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_terminal_bsde"))
+    terminal_train.add_argument("--iterations", type=int, default=3000)
+    terminal_train.add_argument("--seed", type=int, default=2026)
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss):
         command.add_argument(
@@ -232,6 +237,20 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "train-terminal":
+            from .problems import vanilla_case
+            from .terminal_bsde import train_terminal_and_save
+            from .training import PathTrainingConfig
+
+            result = train_terminal_and_save(vanilla_case(), PathTrainingConfig(
+                iterations=args.iterations, seed=args.seed,
+            ), args.run_dir)
+            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
+                              "completed_updates": result["completed_updates"], "selected_step": result["selected_step"],
+                              "parameter_count": result["parameter_count"], "training_seconds": result["training_seconds"],
+                              "evaluation": result["evaluation"], "targets_met": result["targets_met"]},
+                             indent=2, sort_keys=True, allow_nan=False))
+            return
         if args.command == "training-study":
             from .problems import vanilla_case
             from .training_study import TrainingStudy

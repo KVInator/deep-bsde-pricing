@@ -2,7 +2,7 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The implementation includes classical vanilla and basket references, exact GBM simulation, a finite-difference PDE reference, and BSDE derivative/loss diagnostics. A first one-asset value-gradient network is trained on simulated paths, with its initial price, delta and independent path errors reported below.
+The implementation includes classical vanilla and basket references, exact GBM simulation, a finite-difference PDE reference, and BSDE derivative/loss diagnostics. One-asset value-gradient and terminal-loss networks are trained on simulated paths, with independent price and path-error checks. The value-gradient seed study retains its mixed sensitivity results.
 
 ## First value-gradient experiment
 
@@ -32,6 +32,18 @@ The study fixes seeds 2026, 2027 and 2028 and compares terminal-loss weights 1 a
 All six development-workspace runs completed. Selected-model delta errors for weight 1 were -0.08272, -0.02765 and +0.00447; weight 5 gave -0.10935, -0.05881 and +0.04488. Stronger terminal weighting improved final-update fresh-path RMSEs but did not consistently improve the initial delta. The [comparison specification and results](docs/methodology.md#training-reproducibility-and-loss-weighting) retain all seeds, checkpoint choices, runtime and limitations. The neural notebook adds tables and three figures without retraining.
 
 Each run directory is new and protected. The study writes `design.json`, incremental `study.json`, a continuation check, and six run directories with inference and continuation checkpoints. Optional `train --patience N` stops after N scheduled validation checks without improvement; the paired study disables early stopping to keep its update budget fixed. Pause/resume commands are in the methodology.
+
+## Terminal-loss Deep BSDE
+
+```bash
+python -m bsde_pricing train-terminal --run-dir scratch/runs/vanilla_terminal_bsde
+```
+
+The second formulation learns a free initial price and discounted Brownian controls. It propagates values along exact GBM paths and minimises discounted terminal-payoff mismatch. The initial control is free; each later time point has its own two-layer tanh network. The 16-interval, width-16 model has 4,817 parameters and uses the same 3,000-update pilot budget. Training begins with zero initial price/control and uses no analytical labels.
+
+In the first development-workspace run, validation selects update 2,800. Its initial price is **9.40694237** against **9.41340338**, an error of **-0.00646101**. On 2,048 fresh paths, discounted terminal RMSE is **2.49503**, compared with **2.03220** when using analytical controls on the same grid. This is one seed with an encouraging initial-price result and remaining terminal error. It does not establish control accuracy, Greek accuracy or a cost advantage.
+
+The command protects existing directories and saves selected `model.pt`, final `last_model.pt` and `report.json`. These terminal-solver checkpoints support inference; they do not contain optimiser continuation state. The neural notebook adds terminal learning curves, residual distributions and propagated paths. The [terminal-loss specification](docs/methodology.md#terminal-loss-deep-bsde-in-one-asset) derives the discounted recurrence, scaling, stream/selection rules and scope. Control-to-delta recovery and a matched comparison of the two solvers follow separately.
 
 ## Environment
 

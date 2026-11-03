@@ -1125,3 +1125,122 @@ Every continuation check passes, including Adam state, current/selected weights,
 The executed notebook at [69b3cc5](https://github.com/KVInator/deep-bsde-pricing/commit/69b3cc59364e3316bf6da1ec118de15b97f13cc7) changes outputs only. Its 13 code cells have sequential execution counts, eight figures render completely, and no error or stderr output is recorded. All six inference reload checks report zero price/delta discrepancy against their saved evaluations. The original five figures are preserved byte for byte; the three new figures retain per-seed errors, selected/final comparisons and unweighted validation-loss components.
 
 The observed accuracy limitations remain unchanged: one selected weight-one model meets the initial delta target and none of the selected weight-five models does. The larger terminal weight improves final-update fresh-path RMSEs without consistently improving initial sensitivities. Reproducibility and continuation are verified; the remaining pricing/risk errors remain research findings. No further tuning or additional seeds are introduced in this comparison.
+
+
+## Terminal-loss Deep BSDE in one asset
+
+### Learned quantities and discounted propagation
+
+The terminal-loss formulation follows the initial-value and time-step-control construction of Han, Jentzen and E, [Solving high-dimensional partial differential equations using deep learning](https://arxiv.org/abs/1707.02568). This implementation applies it to the existing clean scalar GBM call, uses exact forward GBM transitions and learns discounted Brownian exposures. It does not reproduce the paper's nonlinear examples or claim their accuracy/cost results.
+
+For the already specified clean driver \(f=-rY\), write \(\bar Y_t=e^{-rt}Y_t\) and \(\bar Z_t=e^{-rt}Z_t\). The driver cancels under discounting:
+
+\[
+d\bar Y_t=\bar Z_t\,dW_t,
+\qquad \bar Y_T=e^{-rT}g(S_T).
+\]
+
+For \(M\) uniform intervals, the trainable objects are a scalar \(y_0\), a scalar initial control \(z_0\), and independent control networks \(z_{\theta_m}(S_m)\) for \(m=1,\ldots,M-1\). All controls are discounted. The complete path calculation is
+
+\[
+\bar Y_0=y_0,\qquad
+\bar Y_{m+1}=\bar Y_m+\bar Z_m\Delta W_m,
+\qquad
+\bar Y_M=y_0+\sum_{m=0}^{M-1}\bar Z_m\Delta W_m.
+\]
+
+The controls use the current spot and their fixed time index only. They cannot use the next Brownian increment or later state. This adaptedness makes each left-point stochastic increment have conditional mean zero. Coupling different batch rows would also change the intended state-only map; the networks contain no batch normalisation or cross-path layers.
+
+`TerminalControlNetwork` owns these free parameters, time-step networks and the recurrence. `TerminalBSDESolver` owns fitting, validation, independent evaluation and persistence. The CLI and notebook call that implementation. `PathTrainingConfig` and `sample_training_paths` are shared with the value-gradient solver, preserving its original seeded calculation. The forward state kernel and terminal payoff remain owned by `GBMModel` and `EuropeanCall`; no second GBM or contract implementation is introduced.
+
+### Units, architecture and objective
+
+Use strike \(K\), initial spot \(S_0\) and maturity \(T\) as scales. For dimensionless free parameters \(a,b\) and dimensionless network outputs \(h_m\),
+
+\[
+y_0=Ka,\qquad \bar Z_0=\frac K{\sqrt T}b,
+\qquad \bar Z_m=\frac K{\sqrt T}h_m(S_m/S_0-1).
+\]
+
+The factor \(K/\sqrt T\) gives controls price-per-square-root-year units; multiplying by \(\Delta W\), measured in square-root-years, gives price units. Discounting is already included in the learned control, so the recurrence does not apply another factor \(e^{-rt_m}\). Recovering the undiscounted control later requires \(Z_m=e^{rt_m}\bar Z_m\).
+
+Both initial free parameters start at zero. The subnetworks use a locally seeded CPU initialisation that restores the caller's Torch random state. Each later time has two width-16 tanh layers and one scalar output. A scalar subnet has \(w^2+4w+1\) parameters. The full parameter count is
+
+\[
+2+(M-1)(w^2+4w+1)=2+15\times321=4817.
+\]
+
+The existing value-gradient network has 337 parameters. Equal update counts therefore do not represent equal parameter counts or equal computational work.
+
+For each fresh training batch,
+
+\[
+E_n(\theta)=y_0+\sum_m\bar Z_m^{(n)}\Delta W_m^{(n)}-e^{-rT}g(S_T^{(n)}),
+\qquad
+L(\theta)=\frac1N\sum_n(E_n(\theta)/K)^2.
+\]
+
+There are no local value-consistency penalties or analytical price/Greek labels. The same known terminal payoff defines the training target. The loss differentiates the propagated terminal value with respect to all free parameters and subnet weights. No input gradient or Hessian of a price network is needed during this solver's training.
+
+A useful population identity separates initial bias and residual dispersion. If \(P=e^{-rT}g(S_T)\) and \(I=\sum_m\bar Z_m\Delta W_m\), adaptedness gives \(\mathbb E[I]=0\). Thus
+
+\[
+\mathbb E[E]=y_0-\mathbb E[P],\qquad
+\mathbb E[E^2]=(y_0-\mathbb E[P])^2+\operatorname{Var}(I-P).
+\]
+
+For fixed controls, the population-optimal initial scalar is the discounted expected payoff. A small observed initial bias can coexist with a large terminal residual variance. Conversely, a finite validation sample can select a checkpoint whose held-out error is worse. Neither the seed nor the training/selection objective guarantees accuracy.
+
+### Fixed pilot, streams and saved models
+
+The declared pilot uses the original vanilla financial inputs, 16 intervals, fresh batches of 128 paths, 3,000 Adam updates, width 16, seed 2026 and CPU float64. The learning rate is 0.001 until 70% of the configured updates and 0.0003 thereafter. A 180-second per-fit cap bounds execution. The existing 0.25-unit initial price inspection target is retained; no terminal-RMSE pass threshold is invented after observing the run. The budget is not extended to meet an accuracy target.
+
+SeedSequence children 0, 1 and 2 supply training paths, 256 fixed validation paths and 2,048 held-out paths, respectively. Validation minimises terminal MSE at update zero, every 100 updates and the full configured budget. The earlier candidate wins an exact tie. Analytical prices are recorded for inspection but never select the checkpoint. A time-limited run retains its actual update count; only scheduled candidates reached before the cap can be selected. Early stopping and seed/architecture searches are not added to this first terminal-loss experiment.
+
+Fitting time includes fresh path generation, network propagation, backpropagation, Adam updates, finite-gradient/parameter checks and scheduled validation. Network/optimiser construction and the fixed validation draw precede the timer. Evaluation time covers both final and selected models and the matched analytical-control residual calculations. The prior Torch thread count is restored after fitting and evaluation. Timing is from one measured development run, not a MacBook estimate or a matched performance comparison.
+
+The new run directory contains selected inference weights in `model.pt`, final inference weights in `last_model.pt`, and numerical/environment/configuration evidence in `report.json`. Existing destinations are rejected before fitting. Numerical fitting failures retain `failure.json` and raise explicitly. Checkpoint loading maps tensors to CPU, uses `weights_only=True`, validates method/version and financial scales, and rejects nonfinite parameters. These first terminal-loss checkpoints support inference only; the separate value-gradient continuation implementation remains unchanged. No terminal-solver optimiser-resume claim is made.
+
+### Independent price and terminal evaluation
+
+The initial scalar price is compared directly with Black–Scholes. Its signed error is a deterministic model output and has no Monte Carlo standard error. The scalar does not depend on an input spot in a learned pricing function, so differentiating it with respect to spot cannot produce a delta. Recovering risk through the diffusion/control map belongs to the subsequent comparison. A saved fixed-start checkpoint also does not establish accuracy after changing initial spot or financial parameters.
+
+For the same held-out paths, report terminal residual mean, its path-level standard error, RMSE, selected quantiles and the normalised terminal objective. Undiscounted terminal RMSE multiplies discounted RMSE by \(e^{rT}\); the two units are labelled separately. The reported mean stochastic integral and its standard error are an adapted-martingale diagnostic. Its finite-sample mean need not be exactly zero. Residual-mean uncertainty is not an uncertainty interval for the learned initial scalar or a training-seed variability estimate.
+
+A separate analytical-control path calculation uses
+
+\[
+\bar Z_m^{\mathrm{BS}}=e^{-rt_m}\sigma S_m\Delta_{\mathrm{BS}}(t_m,S_m),\qquad
+E^{\mathrm{BS}}=u_{\mathrm{BS}}(0,S_0)+\sum_m\bar Z_m^{\mathrm{BS}}\Delta W_m-P.
+\]
+
+It reuses `PricingBSDE.control` and the independent analytical reference on matched states and increments. Its residual is nonzero on a finite left-point grid even though the GBM states themselves are exact. It is a useful discretisation comparison, not a proven lower bound on the neural loss. Neither this calculation nor the analytical initial price enters training or selection.
+
+Propagated \(\bar Y_m\) values generally depend on path history. They can be compared with analytical conditional prices along a path, but they are not outputs from a globally learned \(u_\theta(t,S)\). The notebook preserves raw terminal mismatches and any negative propagated values without clipping.
+
+### Retained first terminal-loss results
+
+The Linux development run uses Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu. It completes 3,000 updates in 23.65706 seconds of fitting, with 0.02737 seconds for paired evaluation. The validation-selected update is 2,800. Fixed validation loss decreases from 0.09626809 before training to a selected minimum of 0.0006095010; the final validation loss is 0.0006099031.
+
+| Quantity | Validation-selected update 2,800 | Final update 3,000 |
+| --- | ---: | ---: |
+| Initial price | 9.40694237 | 9.45653568 |
+| Analytical price | 9.41340338 | 9.41340338 |
+| Signed initial price error | -0.00646101 | +0.04313230 |
+| Discounted initial Brownian control | 11.82480928 | 12.04941140 |
+| Discounted terminal RMSE | 2.49502716 | 2.49221999 |
+| Undiscounted terminal RMSE | 2.57101205 | 2.56811939 |
+| Normalised terminal MSE | 0.0006225161 | 0.0006211160 |
+| Terminal residual mean | +0.01404410 | +0.05974090 |
+| SE of terminal residual mean | 0.05514542 | 0.05506842 |
+
+Both models meet the pilot initial-price inspection target. For the selected model, the absolute price error is approximately 0.069% of analytical option value. Its stochastic-integral mean is -0.08629497 with standard error 0.30343400. The analytical-control discounted terminal RMSE on the same 2,048 paths is 2.03220071. The learned terminal mismatch therefore remains substantial despite the small initial-price error. The selected model's slightly higher held-out terminal RMSE than the final model is retained.
+
+This is an encouraging scalar-price observation from one fixed seed, not a robust solver ranking, a Greek result or a speed advantage. Parameter counts, objectives and computational work differ between formulations. Seed variation, explicit control-to-delta recovery and a matched two-solver comparison have not been established for this new solver. The existing value-gradient runs and their mixed accuracy results remain intact.
+
+```bash
+python -m bsde_pricing train-terminal --run-dir scratch/runs/vanilla_terminal_bsde
+python -m unittest discover -s tests -v
+```
+
+The neural notebook appends the saved-run configuration, parameter/cost table, selected/final initial prices, learning curves, terminal residuals and first three fresh propagated paths. Its extra descriptive evaluation uses 512 paths, seed 2027 and SeedSequence branch 3. It loads the saved checkpoints without fitting. MacBook verification of this new experiment remains pending.

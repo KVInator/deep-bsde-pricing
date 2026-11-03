@@ -20,7 +20,7 @@ from .problems import EuropeanCall, GBMModel, PricingCase
 
 
 @dataclass(frozen=True)
-class TrainingConfig:
+class PathTrainingConfig:
     iterations: int = 3000
     n_steps: int = 16
     batch_size: int = 128
@@ -31,8 +31,6 @@ class TrainingConfig:
     validation_paths: int = 256
     evaluation_paths: int = 2048
     max_seconds: float = 180
-    terminal_weight: float = 1
-    patience: int | None = None
 
     def __post_init__(self):
         for name in ("iterations", "n_steps", "batch_size", "width", "log_every",
@@ -47,11 +45,29 @@ class TrainingConfig:
         if (not math.isfinite(self.learning_rate) or self.learning_rate <= 0
                 or not math.isfinite(self.max_seconds) or self.max_seconds <= 0):
             raise ValueError("learning_rate and max_seconds must be positive and finite.")
+
+
+@dataclass(frozen=True)
+class TrainingConfig(PathTrainingConfig):
+    terminal_weight: float = 1
+    patience: int | None = None
+
+    def __post_init__(self):
+        super().__post_init__()
         if not math.isfinite(self.terminal_weight) or self.terminal_weight <= 0:
             raise ValueError("terminal_weight must be positive and finite.")
         if self.patience is not None and (isinstance(self.patience, bool)
                 or not isinstance(self.patience, int) or self.patience < 1):
             raise ValueError("patience must be a positive number of validation checks or None.")
+
+
+def sample_training_paths(case: PricingCase, n_steps: int, rng: np.random.Generator, n_paths: int):
+    """CPU float64 states (N,M+1,d) and independent increments (N,M,d)."""
+    increments = rng.standard_normal((n_paths, n_steps, case.model.dimension))*math.sqrt(
+        case.contract.maturity/n_steps,
+    )
+    states = case.model.path_from_increments(case.initial_spots, case.contract.maturity, increments)
+    return torch.from_numpy(states), torch.from_numpy(increments)
 
 
 @dataclass(frozen=True)
@@ -88,13 +104,7 @@ class FBSNNSolver:
         self._continuation_model = None
 
     def _batch(self, rng: np.random.Generator, n_paths: int):
-        increments = rng.standard_normal((n_paths, self.config.n_steps, 1))*math.sqrt(
-            self.case.contract.maturity/self.config.n_steps,
-        )
-        states = self.case.model.path_from_increments(
-            self.case.initial_spots, self.case.contract.maturity, increments,
-        )
-        return torch.from_numpy(states), torch.from_numpy(increments)
+        return sample_training_paths(self.case, self.config.n_steps, rng, n_paths)
 
     def initial_value(self) -> dict[str, float]:
         point = torch.tensor([[0, *self.case.initial_spots]], dtype=torch.float64, device="cpu")
