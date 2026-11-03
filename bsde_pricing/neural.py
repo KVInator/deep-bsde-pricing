@@ -51,12 +51,13 @@ class ValueNetwork(nn.Module):
 class ValueDerivatives:
     values: torch.Tensor
     gradient: torch.Tensor
-    hessian: torch.Tensor
+    hessian: torch.Tensor | None
 
 
+@torch.enable_grad()
 def value_derivatives(
     value: Callable[[torch.Tensor], torch.Tensor], inputs: torch.Tensor,
-    *, parameter_graph: bool = False,
+    *, parameter_graph: bool = False, compute_hessian: bool = True,
 ) -> ValueDerivatives:
     """Return V, (V_t, deltas), and the full time/spot Hessian.
 
@@ -64,7 +65,10 @@ def value_derivatives(
     independently and be twice differentiable. Inputs are copied to owned
     graph leaves; input .grad is untouched. parameter_graph retains the
     derivative graph for subsequent differentiation with respect to weights.
+    compute_hessian=False omits curvature for gradient-only BSDE losses.
     """
+    if torch.is_inference_mode_enabled():
+        raise ValueError("Input derivatives require autograd outside inference_mode.")
     if inputs.ndim != 2 or inputs.shape[0] < 1 or inputs.shape[1] < 2:
         raise ValueError("inputs must have nonempty shape (N, dimension + 1).")
     if inputs.dtype not in (torch.float32, torch.float64) or not bool(torch.isfinite(inputs).all()):
@@ -73,21 +77,25 @@ def value_derivatives(
     y = value(x)
     if y.shape != (len(x), 1):
         raise ValueError("The value map must return shape (N, 1).")
-    gradient = (torch.autograd.grad(y.sum(), x, create_graph=True, allow_unused=True)[0]
-                if y.requires_grad else None)
+    gradient = None
+    if y.requires_grad:
+        gradient = torch.autograd.grad(
+            y.sum(), x, create_graph=compute_hessian or parameter_graph, allow_unused=True,
+        )[0]
     if gradient is None:
         gradient = x * 0
     rows = []
-    for coordinate in range(x.shape[1]):
+    for coordinate in range(x.shape[1] if compute_hessian else 0):
         component = gradient[:, coordinate]
         row = (torch.autograd.grad(
             component.sum(), x, create_graph=parameter_graph, retain_graph=True,
             allow_unused=True,
         )[0] if component.requires_grad else None)
         rows.append(torch.zeros_like(x) if row is None else row)
-    hessian = torch.stack(rows, dim=1)
-    if not all(bool(torch.isfinite(a).all()) for a in (y, gradient, hessian)):
+    hessian = torch.stack(rows, dim=1) if compute_hessian else None
+    if not all(bool(torch.isfinite(a).all()) for a in (y, gradient, *rows)):
         raise ArithmeticError("Nonfinite value or automatic derivative.")
     if not parameter_graph:
-        y, gradient, hessian = (a.detach() for a in (y, gradient, hessian))
+        y, gradient = y.detach(), gradient.detach()
+        hessian = hessian.detach() if hessian is not None else None
     return ValueDerivatives(y, gradient, hessian)

@@ -136,6 +136,17 @@ The command checks time derivatives, spot deltas and Hessians against scaled pol
 
 The [derivative specification](docs/methodology.md#automatic-derivatives-and-backend-checks) explains physical-unit scaling, graph ownership, the independent checks and timing scope. MPS availability alone does not establish derivative support or a speed advantage. Use `--backend cpu` for a CPU-only report or `--backend mps` to require an MPS trial. The neural-results notebook begins with the first trained solver.
 
+## Known-solution BSDE loss
+
+```bash
+python -m bsde_pricing bsde-loss --case vanilla --output scratch/vanilla_loss.json
+python -m bsde_pricing bsde-loss --case geometric --output scratch/geometric_loss.json
+```
+
+`LocalBSDELoss` combines discounted one-step consistency with terminal payoff matching. A differentiable analytical oracle checks the same loss that will be used by the value network. The reports separate local and terminal terms, raw residual RMS, path-level sampling uncertainty and deliberately incorrect driver/control conventions.
+
+On 2,048 coupled paths and grids from eight to 64 intervals, the default vanilla local loss falls from **8.01864e-4** to **1.05459e-4**; the geometric loss falls from **9.54428e-4** to **1.23041e-4**. Analytical terminal errors are zero in these runs. The wrong driver is detected by its signed residual bias, even though its squared loss also decreases. A wrong correlation transpose leaves the finest geometric loss approximately **30.9 times** the correct loss. The [loss specification](docs/methodology.md#local-discounted-bsde-loss) defines the scaling, checks and finite-grid interpretation. These are CPU float64 consistency checks before pricing-network training.
+
 ## Notebook exploration
 
 Open [Classical references](notebooks/01_classical_references.ipynb) or [Basket references](notebooks/02_basket_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.

@@ -103,6 +103,36 @@ class GBMModel:
             raise ValueError("independent_normals must have shape (N >= 1, dimension).")
         return self._terminal_states(spots, horizon, deviation, drift, len(normals), normals)
 
+    def path_from_increments(
+        self, initial_spots: ArrayLike, horizon: float, increments: ArrayLike,
+    ) -> NDArray[np.float64]:
+        """Exact states (N, M+1, d) from independent Brownian increments.
+
+        increments has shape (N, M, d) on a uniform positive-horizon grid,
+        in sqrt(year) units. Inputs are not modified. States use the same
+        transition as terminal sampling, evaluated from cumulative Brownian
+        values. Distributional validity of supplied increments is external.
+        """
+        spots, horizon, _, _ = self._terminal_parameters(initial_spots, horizon)
+        increments = _finite_array(increments, "increments")
+        if (horizon <= 0 or increments.ndim != 3 or min(increments.shape[:2]) < 1
+                or increments.shape[2] != self.dimension):
+            raise ValueError("Path increments require positive horizon and shape (N, M, d).")
+        n_paths, n_steps, _ = increments.shape
+        times = np.linspace(0, horizon, n_steps + 1)
+        if np.any(np.diff(times) <= 0):
+            raise ValueError("Time grid is below floating-point resolution.")
+        states = np.empty((n_paths, n_steps + 1, self.dimension))
+        states[:, 0] = spots
+        brownian = np.zeros((n_paths, self.dimension))
+        with np.errstate(over="raise", invalid="raise"):
+            for index, time in enumerate(times[1:], start=1):
+                brownian += increments[:, index-1]
+                states[:, index] = self.terminal_from_normals(
+                    spots, float(time), brownian / math.sqrt(time),
+                )
+        return states
+
     def _terminal_parameters(
         self, initial_spots: ArrayLike, horizon: float,
     ) -> tuple[tuple[float, ...], float, NDArray[np.float64], NDArray[np.float64]]:

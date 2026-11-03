@@ -896,3 +896,80 @@ The default command was verified on an ARM64 MacBook with macOS 27.0.1, Python 3
 These are five measured calls after two warmups, at 256 rows, three assets and hidden width 16. MPS calls span 5.6155-7.9942 ms, while CPU float32 calls span 1.3553-1.3749 ms. MPS takes approximately 4.95 times the CPU float32 median for this small synchronized workload; this does not establish performance at larger batches or during full training.
 
 CPU float64 vanilla price, time derivative, delta and gamma errors are at roundoff scale. MPS float32 absolute errors are approximately 5.85e-6 for network values, 3.29e-6 for the full input gradient, 1.04e-6 for the Hessian and 2.39e-8 for the objective's parameter gradient, all within the declared tolerances. The zero CPU float64 network discrepancies arise from comparison with the same deterministic CPU baseline; the independent evidence comes from the analytical oracles and finite-difference tests. The report verifies the tested operations without CPU fallback, not every possible MPS operator or future model. CPU float64 remains the baseline for the next small known-solution checks; backend choice for larger training workloads requires a fresh accuracy and cost comparison.
+
+## Local discounted BSDE loss
+
+### Residual and objective
+
+For a candidate value map \(V_\theta\), define \(Y_n=V_\theta(t_n,S_n)\), spot deltas \(\Delta_n=\nabla_SV_\theta(t_n,S_n)\), and independent-Brownian controls \(Z_n=A(S_n)^\top\Delta_n\). The local residual follows from
+
+\[
+d(e^{-rt}Y_t)=-e^{-rt}(f(Y_t)+rY_t)dt+e^{-rt}Z_t^\top dB_t.
+\]
+
+The discrete residual on path \(k\) is
+
+\[
+R_{k,n}=e^{-rt_{n+1}}Y_{k,n+1}-e^{-rt_n}Y_{k,n}
+ +e^{-rt_n}[f(Y_{k,n})+rY_{k,n}]\Delta t_n
+ -e^{-rt_n}Z_{k,n}^\top\Delta B_{k,n}.
+\]
+
+For the pricing driver \(f(y)=-ry\), the bracket cancels exactly. Keeping it explicit fixes the BSDE convention and permits a driver-sign fault to be tested. The terminal residual is \(E_k=e^{-rT}[V_\theta(T,S_{k,M})-g(S_{k,M})]\).
+
+With a fixed positive currency scale \(K_*\) and terminal weight \(\lambda>0\), the implemented loss is
+
+\[
+\mathcal L_{\rm local}=\frac1N\sum_{k=1}^N\sum_{n=0}^{M-1}
+       \left(\frac{R_{k,n}}{K_*}\right)^2,\qquad
+\mathcal L_{\rm terminal}=\frac1N\sum_{k=1}^N\left(\frac{E_k}{K_*}\right)^2,
+\qquad \mathcal L=\mathcal L_{\rm local}+\lambda\mathcal L_{\rm terminal}.
+\]
+
+Both loss components are dimensionless. Residuals themselves retain discounted currency units. Local errors are summed over time, then averaged over paths; averaging over both axes would add another factor \(1/M\) and change the balance against the terminal term as the grid changes. Default \(K_*\) is strike and \(\lambda=1\), fixed before the diagnostic. There is no adaptive reweighting or division by the observed loss.
+
+Local consistency plus terminal-value matching follows the formulation described by [Raissi's FBSNN methodology](https://maziarraissi.github.io/FBSNNs/). The discounting, exact GBM state transitions and normalisation above specify this implementation. The author's symbol \(Z\) denotes a spot gradient there; this project reserves \(Z\) for the Brownian control and uses \(\Delta\) for the spot gradient.
+
+### Implementation and analytical substitution
+
+`LocalBSDELoss` is the differentiable tensor adapter for the existing `PricingBSDE`. It owns fixed coefficient buffers, computes the same driver, control map and payoff in PyTorch, and returns local/terminal/total losses together with raw residuals. Tests compare those tensor financial operations with the existing NumPy contracts. Path tensors have shapes `(N,M+1,d)` for states, `(N,M,d)` for independent Brownian increments and `(M+1,)` for times. They are fixed finite data, without `requires_grad`; value-model parameters retain their graph.
+
+Only first input derivatives are required by this loss. `value_derivatives(..., compute_hessian=False)` avoids constructing a full Hessian, while `parameter_graph=True` permits backpropagation through the deltas and controls. The Hessian checks remain available for derivative verification. A finite perturbation of a network weight independently checks the gradient of the complete BSDE loss. A hand-calculated one-step example checks signs, discount factors, time reduction, scale and terminal weight.
+
+Input differentiation explicitly enables autograd, including during an outer `no_grad` evaluation. `parameter_graph=False` then detaches the results. The stronger `inference_mode` is rejected because it disables the required input derivative graph.
+
+`GBMModel.path_from_increments` evaluates exact grid states from cumulative independent Brownian values using the existing terminal transition. Coarse increments sum consecutive increments from one finest-grid sample, coupling the paths across refinement levels. No Euler state approximation is introduced. Model drift, dividends and correlation remain those of the specified risk-neutral GBM.
+
+`AnalyticalCall` supplies a differentiable vanilla/geometric known solution, sharing the tensor vanilla expression with the earlier autograd diagnostic. Its effective geometric parameters come from `GeometricBasketReference`; prices and coordinate deltas are checked against the existing scalar references. This is a diagnostic oracle, while application pricing commands continue to use those references. The oracle uses the exact payoff at maturity and differentiates controls strictly before maturity. Terminal supervision uses payoff values; no payoff Greek is required at the exercise kink. Positive maturity and variance are required by the oracle diagnostic.
+
+### Refinement and fault detection
+
+For the exact solution, local residuals need not be zero on individual finite-grid paths. For a sufficiently regular integrand, one-step RMS is of order \(\Delta t\); the sum of expected squared residuals is then of order \(\Delta t\) on a fixed horizon. These are comparison guides for the observed grids, not convergence guarantees at a nonsmooth call payoff. The earlier cumulative martingale diagnostic measures a different quantity: its terminal residual RMS is approximately of order \(\sqrt{\Delta t}\).
+
+The diagnostic reports raw local RMS, both normalised loss terms and the mean of each path's summed residual divided by maturity. Under the ideal sampling model, the correct discounted analytical solution has zero expected signed residual at every grid size. Standard errors use those independent path sums. Time steps within a path and grid-level estimates on shared paths are dependent.
+
+Two private diagnostic subclasses deliberately corrupt the canonical loss without changing its residual formula:
+
+- Reversing the driver to \(+rY\) adds \(2r e^{-rt_n}Y_n\Delta t_n\). Its expected path-averaged residual-rate difference is \(2rV(0,S_0)\). The paired difference uses identical paths and must exceed five of its estimated standard errors to flag the fault. At \(r=0\), this fault is explicitly inapplicable.
+- Transforming row controls with `L.T` instead of `L` introduces a stochastic exposure error. Its squared-increment contribution accumulates to a nonvanishing local-loss floor. The finest wrong-control loss must exceed three times the correct loss. A symmetric Cholesky factor makes the transpose fault inapplicable; the asymmetric three-asset geometric case supplies a meaningful check.
+
+The other diagnostic checks require decreasing local loss, terminal loss at most 1e-24, and correct signed means within four estimated standard errors. These finite-sample checks apply to the declared cases, seed and grids. They are not simultaneous confidence-coverage statements. A sign fault can retain the same decreasing squared-loss order as the correct discretisation, so a falling loss alone cannot establish a correct BSDE implementation.
+
+### Default known-solution results
+
+```bash
+python -m bsde_pricing bsde-loss --case vanilla --output scratch/vanilla_loss.json
+python -m bsde_pricing bsde-loss --case geometric --output scratch/geometric_loss.json
+python -m unittest discover -s tests -v
+```
+
+Both commands use CPU float64, one PyTorch CPU thread during evaluation, 2,048 paths, PCG64 seed 2026 and nested grids `(8,16,32,64)`. The report retains the financial specification, versions, seed, scale, weight, grid statistics, fault applicability and check outcomes. The previous PyTorch thread count is restored. Numerical failures raise explicitly; a failed diagnostic check still saves the report and returns a nonzero CLI status.
+
+| Case | Local loss, 8 intervals | Local loss, 64 intervals | One-step RMS, 64 intervals | Terminal loss |
+| --- | ---: | ---: | ---: | ---: |
+| Vanilla | 8.0186436e-4 | 1.0545907e-4 | 0.12836659 | 0 |
+| Geometric basket | 9.5442833e-4 | 1.2304068e-4 | 0.13865463 | 0 |
+
+For vanilla, the finest correct summed-residual rate is -0.0081510 with SE 0.0226521. Reversing the driver gives a paired rate difference of 0.5651456 with SE 0.0096171. For the geometric basket, the corresponding paired difference is 0.6547961 with SE 0.0107733. The finest wrong-transpose geometric loss is 0.00380041, approximately 30.9 times the correct value. All declared default checks pass in the development workspace. Tests also cover a shorter maturity with negative rates, dividends and higher volatility.
+
+These checks establish a usable finite-grid loss and its parameter-gradient calculation. They do not show that the analytical solution globally minimises the discrete objective, that an optimiser will recover it, or that a small training loss alone guarantees price/Greek accuracy. Neural approximation, optimisation, independent evaluation and grid bias remain separate parts of the first training experiment. MacBook execution of these commands is the next verification checkpoint.

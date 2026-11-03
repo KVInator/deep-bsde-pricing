@@ -208,8 +208,13 @@ def main() -> None:
     autograd.add_argument("--backend", choices=("auto", "cpu", "mps"), default="auto")
     autograd.add_argument("--batch-size", type=int, default=256)
     autograd.add_argument("--repeats", type=int, default=5)
+    bsde_loss = commands.add_parser("bsde-loss", help="check local BSDE loss against known solutions")
+    bsde_loss.add_argument("--case", choices=("vanilla", "geometric"), default="vanilla")
+    bsde_loss.add_argument("--paths", type=int, default=2048)
+    bsde_loss.add_argument("--seed", type=int, default=2026)
+    bsde_loss.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
-                    basket_reference, bsde_diagnostic, autograd):
+                    basket_reference, bsde_diagnostic, autograd, bsde_loss):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -239,6 +244,12 @@ def main() -> None:
                     summary = _basket_reference_summary(args, case)
                 elif args.command == "bsde-diagnostic":
                     summary = _bsde_diagnostic_summary(args, case)
+                elif args.command == "bsde-loss":
+                    from .loss_diagnostics import run_loss_diagnostics
+
+                    summary = run_loss_diagnostics(
+                        case, n_paths=args.paths, seed=args.seed, steps=tuple(args.steps),
+                    )
                 else:
                     from .black_scholes import BlackScholesReference
                     from .geometric_basket import GeometricBasketReference
@@ -267,8 +278,8 @@ def main() -> None:
     except (OSError, RuntimeError, ValueError, ArithmeticError) as exc:
         parser.exit(1, f"{args.command.capitalize()} failed: {exc}\n")
     print(report)
-    if args.command == "autograd" and not summary["passed"]:
-        parser.exit(1, "Autograd checks failed; inspect the backend results above.\n")
+    if args.command in ("autograd", "bsde-loss") and not summary["passed"]:
+        parser.exit(1, f"{args.command.capitalize()} checks failed; inspect the report above.\n")
 
 
 if __name__ == "__main__":

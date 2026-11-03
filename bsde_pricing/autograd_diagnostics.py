@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from .black_scholes import BlackScholesReference
+from .analytical_torch import AnalyticalCall
 from .neural import ValueNetwork, value_derivatives
 from .problems import EuropeanCall, GBMModel
 
@@ -44,17 +45,9 @@ def analytical_checks(device: str, dtype: torch.dtype) -> dict[str, dict[str, ob
     checks = {"polynomial_gradient": _check(d.gradient, expected_g, tight),
               "polynomial_hessian": _check(d.hessian, expected_h, tight)}
     inputs = torch.tensor([[0.1, 70], [0.4, 100], [0.8, 130]], dtype=dtype, device=device)
-    # All oracle evaluations are strictly before maturity and away from kinks.
-    def vanilla(a):
-        tau, spot = 1-a[:, 0], a[:, 1]
-        deviation = 0.2 * torch.sqrt(tau)
-        d1 = (torch.log(spot/100) + 0.03*tau) / deviation
-        d2 = d1-deviation
-        cdf = lambda z: 0.5 * torch.erfc(-z / (2**0.5))
-        return (spot*torch.exp(-0.02*tau)*cdf(d1)
-                - 100*torch.exp(-0.03*tau)*cdf(d2))[:, None]
-    d = value_derivatives(vanilla, inputs)
     reference = BlackScholesReference(GBMModel(0.03, (0.2,), (0.02,), ((1,),)), EuropeanCall(100, 1))
+    vanilla = AnalyticalCall(reference.model, reference.contract).to(device=device, dtype=dtype)
+    d = value_derivatives(vanilla, inputs)
     targets = [reference.evaluate(float(s), float(t)) for t, s in inputs.detach().cpu().double().tolist()]
     spots = inputs[:, 1].detach().cpu().double().numpy()
     theta = [0.03*r.call_price - 0.01*s*r.call_delta - 0.5*0.2**2*s*s*r.gamma
