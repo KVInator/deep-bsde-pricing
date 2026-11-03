@@ -1,0 +1,13 @@
+name: bsde-pricing
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - numpy
+  - scipy
+  - matplotlib
+  - pytest
+  - pip:
+      - torch
