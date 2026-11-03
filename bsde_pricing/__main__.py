@@ -1,6 +1,8 @@
 """Command-line entry point for pricing experiments and runtime diagnostics."""
 
 import argparse
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 from .environment import EnvironmentReport
@@ -16,7 +18,11 @@ def main() -> None:
         "describe", help="show a pricing case and its financial conventions"
     )
     describe.add_argument("--case", choices=("vanilla",), default="vanilla")
-    for command in (environment, describe):
+    reference = commands.add_parser(
+        "reference", help="evaluate the analytical price and spot Greeks"
+    )
+    reference.add_argument("--case", choices=("vanilla",), default="vanilla")
+    for command in (environment, describe, reference):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -28,11 +34,23 @@ def main() -> None:
         else:
             from .problems import vanilla_case
 
-            report = vanilla_case().to_json()
+            case = vanilla_case()
+            if args.command == "describe":
+                report = case.to_json()
+            else:
+                from .black_scholes import BlackScholesReference
+
+                result = BlackScholesReference(case.model, case.contract).evaluate(
+                    case.initial_spots[0]
+                )
+                report = json.dumps(
+                    {"method": "black_scholes", "case": case.name, **asdict(result)},
+                    indent=2, sort_keys=True,
+                )
         if args.output is not None:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(report + "\n", encoding="utf-8")
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, ArithmeticError) as exc:
         parser.exit(1, f"{args.command.capitalize()} failed: {exc}\n")
     print(report)
 
