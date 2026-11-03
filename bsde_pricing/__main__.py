@@ -213,6 +213,11 @@ def main() -> None:
     bsde_loss.add_argument("--paths", type=int, default=2048)
     bsde_loss.add_argument("--seed", type=int, default=2026)
     bsde_loss.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64))
+    train = commands.add_parser("train", help="run the bounded one-asset value-gradient experiment")
+    train.add_argument("--case", choices=("vanilla",), default="vanilla")
+    train.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_fbsnn"))
+    train.add_argument("--iterations", type=int, default=3000)
+    train.add_argument("--seed", type=int, default=2026)
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss):
         command.add_argument(
@@ -221,6 +226,20 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "train":
+            from .problems import vanilla_case
+            from .training import TrainingConfig, train_and_save
+
+            result = train_and_save(vanilla_case(), TrainingConfig(
+                iterations=args.iterations, seed=args.seed,
+            ), args.run_dir)
+            print(json.dumps({
+                "run_directory": str(args.run_dir), "status": result["status"],
+                "completed_updates": result["completed_updates"],
+                "training_seconds": result["training_seconds"],
+                "evaluation": result["evaluation"], "targets_met": result["targets_met"],
+            }, indent=2, sort_keys=True, allow_nan=False))
+            return
         if args.command == "environment":
             report = EnvironmentReport.capture().to_json()
         elif args.command == "autograd":

@@ -975,3 +975,55 @@ For vanilla, the finest correct summed-residual rate is -0.0081510 with SE 0.022
 The same default commands pass on the ARM64 MacBook with macOS 27.0.1, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0. Its 63-test suite passes without recorded warnings. The local-loss reductions from eight to 64 intervals are approximately 7.60-fold for vanilla and 7.76-fold for geometric. Finest signed residual means are within 0.36 and 0.24 estimated standard errors of zero, respectively; reversed-driver paired differences are about 58.8 and 60.8 standard errors from zero. The correlation-transpose ratio is 30.8874. These results agree with the workspace results to rounding precision.
 
 These checks establish a usable finite-grid loss and its parameter-gradient calculation. They do not show that the analytical solution globally minimises the discrete objective, that an optimiser will recover it, or that a small training loss alone guarantees price/Greek accuracy. Neural approximation, optimisation, independent evaluation and grid bias remain separate parts of the first training experiment.
+
+## First value-gradient training experiment
+
+### Model, objective and fixed budget
+
+`FBSNNSolver` fits the existing `ValueNetwork` with `LocalBSDELoss`. The first case is the scalar vanilla call, with fixed starting spot 100, strike 100, maturity one year, rate 3%, zero dividend yield and volatility 20%. The network has two hidden layers of 16 tanh units, 337 trainable parameters and the previously verified physical-input scaling. The output is an unconstrained call value; price positivity, monotonicity and Greek bounds are assessed through reference comparisons rather than imposed by the architecture.
+
+The learned objects are \(V_\theta(t,S)\) and \(\Delta_\theta=\partial_SV_\theta\). The Brownian control is \(Z_\theta=\sigma S\Delta_\theta\), computed inside the differentiable loss. The network receives no analytical price or Greek labels in its fitting objective. The terminal payoff is the known contract condition. Analytical results are used only for monitoring and evaluation.
+
+The run uses 16 time intervals, fresh batches of 128 exact GBM paths, 3,000 Adam updates and CPU float64. The learning rate is 0.001 for the first 70% of updates and 0.0003 for the remainder. Loss scale is strike and terminal weight is one. A 180-second training-time cap bounds the run; a capped run retains its actual completed-update count and a `time_budget_reached` status. The initial inspection targets, declared before fitting, are absolute errors no greater than 0.25 currency units for price and 0.02 for delta. Targets do not trigger extra updates, early stopping or checkpoint selection.
+
+Adam follows the PyTorch implementation; checkpoints save module state as described in the official [model saving/loading tutorial](https://docs.pytorch.org/tutorials/beginner/saving_loading_models). No optimiser or activation search is performed in this experiment.
+
+### Streams and checkpoints
+
+NumPy SeedSequence children of seed 2026 have explicit responsibilities: child 0 supplies fresh training paths; child 1 supplies 256 fixed monitoring paths; child 2 supplies 2,048 evaluation paths drawn only after fitting. CPU weight initialisation uses the same recorded seed under the network's locally restored Torch RNG context. No global NumPy or Torch RNG is consumed by path generation or network initialisation.
+
+Monitoring is descriptive. The saved model is the last completed update, even if an earlier monitoring point had a smaller analytical error. Each logging window reports its mean pre-update training loss; monitoring values are evaluated after the logged update. History begins with the untrained model. The analytical local loss is also evaluated on the fixed monitoring paths as a discretisation comparison, not a lower bound on the objective.
+
+The training command creates a new directory containing `model.pt` and `report.json`. Existing directories are rejected before fitting, so previous results are preserved. The checkpoint contains tensors and primitive configuration/financial metadata; loading uses `weights_only=True`, CPU mapping, strict state-dictionary matching and validation that saved scales agree with the financial metadata. Loaded checkpoints support inference. Exact optimiser/RNG continuation is separate work. A new fit requires a new solver instance. Numerical failures raise explicitly and retain a failure record instead of a successful-run report.
+
+### Independent evaluation
+
+The initial price and delta are deterministic outputs of the fixed trained model at \((0,S_0)\). Their signed errors are direct comparisons with Black-Scholes, without Monte Carlo error bars. Variation across trained seeds is not measured by this single run.
+
+On the fresh child-2 sample, price and delta errors are evaluated against the scalar Black-Scholes reference at pre-expiry grid points. Price/delta RMSE averages squared pointwise errors over paths and those times. Terminal payoff RMSE is reported separately, and terminal deltas are excluded. Standard errors for mean signed errors use each independent path's time-averaged error, accounting for within-path dependence. They condition on the trained model and do not measure optimisation or training-seed uncertainty.
+
+Training starts every path from the specified \(S_0\). The sampled distribution explores later states, but the experiment does not establish a global solution over initial spots, rates, volatilities, maturities or arbitrary states. Conditional slices in the notebook use sorted states sampled at fixed interior times, rather than treating changes of initial spot as already trained problems.
+
+The notebook loads the checkpoint without fitting again and uses an additional descriptive sample: seed 2027, SeedSequence branch 3 and 512 paths. This sample is distinct from the fitting, monitoring and saved evaluation streams. The first three trajectories are plotted without selection by prediction quality. Figures retain the full learning trajectory, errors, sampled tails and terminal mismatch.
+
+### Retained first-run results
+
+In the Linux development workspace with Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu, the fixed 3,000-update run finishes in approximately 12.7 seconds. This is one measured run on that environment, not a MacBook timing or a performance comparison. The timer includes batch generation, derivative evaluation, optimiser updates and monitoring; model/optimiser construction and the initial monitoring-path draw precede it. Post-training evaluation has its own reported duration. One PyTorch CPU thread is used during fitting and saved-run evaluation, and the previous thread count is restored.
+
+| Initial quantity | Learned | Analytical | Signed error | Inspection target |
+| --- | ---: | ---: | ---: | --- |
+| Price | 9.5622976261 | 9.4134033839 | +0.1488942422 | Met: absolute error at most 0.25 |
+| Delta | 0.5160791851 | 0.5987063257 | -0.0826271406 | Missed: absolute error at most 0.02 |
+
+On the 2,048 independent evaluation paths, pre-expiry price RMSE is 0.92229567, delta RMSE is 0.11624185 and terminal payoff RMSE is 1.75547535. Mean signed price error is 0.08592612 (path-level SE 0.01316253); mean signed delta error is -0.01105461 (SE 0.00171941). A small average signed error can coexist with substantial pointwise errors through cancellation.
+
+The held-out local loss is 0.0002490521 and terminal loss is 0.0002902230, giving total loss 0.0005392750. The analytical solution's local loss on those same paths is 0.0003959160. The trained local component being smaller than the analytical component does not establish better pricing: the learned model has a nonzero terminal error, a biased initial delta, and visible shape violations in sampled tails. Negative call values and deltas outside their analytical bounds remain in the plotted raw outputs. No output clipping or hard constraint projection is used.
+
+The result meets the first price target and misses the delta target. It does not yet separate approximation error, optimiser error and finite-grid bias. The next controlled experiments can investigate stability and loss balance, while independent errors remain separate from the training objective. The run has not been extended or replaced to make both targets pass.
+
+```bash
+python -m bsde_pricing train --run-dir scratch/runs/vanilla_fbsnn
+python -m unittest discover -s tests -v
+```
+
+The default directory must be new. An explicitly named alternative directory retains a separate experiment. `notebooks/03_neural_solvers.ipynb` loads its selected run and provides eight code cells with five retained figures. Core tests check parameter updates, independent stream ownership, analytical evaluation metrics, inference checkpoint round trips, directory protection, timeout reporting and explicit failure records. MacBook fitting, checkpoint loading and notebook rendering are the remaining verification steps for this experiment.

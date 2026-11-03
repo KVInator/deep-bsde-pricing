@@ -2,7 +2,24 @@
 
 A numerical study of neural BSDE methods for multi-asset derivative pricing and risk. The planned comparison covers value-gradient and terminal-loss formulations, independent price and delta references, and learned martingale control variates.
 
-The current implementation provides validated financial problems, a single-asset Black-Scholes reference, exact-terminal Monte Carlo prices and deltas with sampling uncertainty, a one-dimensional finite-difference PDE reference, correlated multi-asset terminal sampling with moment diagnostics, an exact geometric-basket price and coordinate-delta reference, arithmetic-basket references with geometric controls and scrambled Sobol sampling, and an analytical BSDE time-refinement diagnostic. Environment diagnostics record the numerical runtime. Neural solvers are not yet implemented.
+The implementation includes classical vanilla and basket references, exact GBM simulation, a finite-difference PDE reference, and BSDE derivative/loss diagnostics. A first one-asset value-gradient network is trained on simulated paths, with its initial price, delta and independent path errors reported below.
+
+## First value-gradient experiment
+
+```bash
+python -m bsde_pricing train --run-dir scratch/runs/vanilla_fbsnn
+```
+
+The default experiment uses CPU float64, two 16-unit tanh layers, 16 time intervals and 3,000 Adam updates with 128 fresh paths per update. A separate fixed stream monitors the loss; fresh post-training paths measure errors against Black-Scholes. The final update is retained without tuning the budget to meet the inspection targets.
+
+| Initial quantity | Learned | Analytical | Signed error | Absolute-error target |
+| --- | ---: | ---: | ---: | ---: |
+| Price | 9.56229763 | 9.41340338 | +0.14889424 | 0.25, met |
+| Delta | 0.51607919 | 0.59870633 | -0.08262714 | 0.02, missed |
+
+These are single-seed development-workspace results. The delta target is missed despite a lower training loss. On 2,048 fresh paths, pre-expiry price RMSE is 0.92230, delta RMSE is 0.11624 and terminal payoff RMSE is 1.75548. The unconstrained network can also violate option bounds in sampled tails. This is an initial experiment, with its errors retained for analysis.
+
+The command saves `model.pt` and `report.json` under the chosen new run directory. Existing runs are protected. Open [Neural solvers](notebooks/03_neural_solvers.ipynb) for saved-run learning curves, price/delta errors, fresh trajectories, conditional state slices and terminal-fit diagnostics. The [training specification](docs/methodology.md#first-value-gradient-training-experiment) records the objective, data streams, checkpoint rule, timing scope and limits of the fixed-start experiment.
 
 ## Environment
 
@@ -149,7 +166,7 @@ On 2,048 coupled paths and grids from eight to 64 intervals, the default vanilla
 
 ## Notebook exploration
 
-Open [Classical references](notebooks/01_classical_references.ipynb) or [Basket references](notebooks/02_basket_references.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`.
+Open [Classical references](notebooks/01_classical_references.ipynb), [Basket references](notebooks/02_basket_references.ipynb) or [Neural solvers](notebooks/03_neural_solvers.ipynb) in VS Code with the Microsoft Jupyter extension. Select the `bsde-pricing` Python environment and run all cells. The first setup cell supports a kernel working directory at either the repository root or `notebooks/`. The neural notebook loads a saved run produced by the training command above.
 
 For an existing environment, install and register the notebook kernel:
 
