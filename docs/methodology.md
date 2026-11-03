@@ -882,3 +882,17 @@ For each backend the same fixed weights and inputs are used, followed by two war
 `auto` always checks CPU float64 and float32, then trials MPS float32 when available. An unavailable MPS backend is recorded explicitly; `--backend mps` makes its absence a failed command. Numerical failures and unsupported operations remain in the report and give a nonzero exit status. An oracle execution failure is retained while the network workload is still attempted. The MPS trial rejects `PYTORCH_ENABLE_MPS_FALLBACK=1`, so CPU fallback cannot masquerade as an MPS result. There is no automatic backend selection for subsequent training from availability alone.
 
 Initial Linux workspace checks use PyTorch 2.15.0+cpu. Both CPU precisions pass the analytical and network comparisons. MPS is unavailable there, so Apple-silicon support, accuracy and timings require the MacBook report. The existing environment specification remains the verified MacBook specification. The next calculation is a known-solution BSDE loss check; the first trained-network notebook follows the first solver implementation.
+
+### Apple-silicon verification
+
+The default command was verified on an ARM64 MacBook with macOS 27.0.1, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0, using implementation [523ffb7](https://github.com/KVInator/deep-bsde-pricing/commit/523ffb715bd8b9ac97fd67cf98645c4a0f09feec). All analytical and network derivative checks pass on CPU float64, CPU float32 and MPS float32. The complete 56-test suite also passes on this machine.
+
+| Backend | Precision | Median complete-call time |
+| --- | --- | ---: |
+| CPU, one thread | float64 | 1.4584 ms |
+| CPU, one thread | float32 | 1.3577 ms |
+| MPS | float32 | 6.7233 ms |
+
+These are five measured calls after two warmups, at 256 rows, three assets and hidden width 16. MPS calls span 5.6155-7.9942 ms, while CPU float32 calls span 1.3553-1.3749 ms. MPS takes approximately 4.95 times the CPU float32 median for this small synchronized workload; this does not establish performance at larger batches or during full training.
+
+CPU float64 vanilla price, time derivative, delta and gamma errors are at roundoff scale. MPS float32 absolute errors are approximately 5.85e-6 for network values, 3.29e-6 for the full input gradient, 1.04e-6 for the Hessian and 2.39e-8 for the objective's parameter gradient, all within the declared tolerances. The zero CPU float64 network discrepancies arise from comparison with the same deterministic CPU baseline; the independent evidence comes from the analytical oracles and finite-difference tests. The report verifies the tested operations without CPU fallback, not every possible MPS operator or future model. CPU float64 remains the baseline for the next small known-solution checks; backend choice for larger training workloads requires a fresh accuracy and cost comparison.
