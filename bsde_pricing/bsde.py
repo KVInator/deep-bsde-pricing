@@ -11,6 +11,17 @@ from .problems import EuropeanCall, GBMModel, _finite_array
 
 
 @dataclass(frozen=True)
+class ControlRecovery:
+    deltas: NDArray[np.float64]
+    reconstructed_controls: NDArray[np.float64]
+    absolute_residual: NDArray[np.float64]
+    relative_residual: NDArray[np.float64]
+    condition_number: NDArray[np.float64]
+    smallest_singular_value: NDArray[np.float64]
+    inverse_norm: NDArray[np.float64]
+
+
+@dataclass(frozen=True)
 class PricingBSDE:
     """dY = -f(Y) dt + Z.dB, with independent Brownian coordinates B.
 
@@ -66,6 +77,40 @@ class PricingBSDE:
 
     def terminal_value(self, spots: ArrayLike) -> NDArray[np.float64]:
         return self.contract.payoff(self._states(spots))
+
+    def recover_deltas(self, spots: ArrayLike, controls: ArrayLike) -> ControlRecovery:
+        """Solve diffusion.T @ delta = Z for undiscounted Brownian controls.
+
+        Arrays have shape (..., d); diagnostics use Euclidean/operator 2-norms
+        and shape (...,). Both condition number and inverse norm are retained:
+        a tiny scalar diffusion has condition number one but amplifies errors.
+        Singular maps are rejected without repair or regularisation.
+        """
+        values = self._states(spots)
+        controls = _finite_array(controls, "controls")
+        if controls.shape != values.shape:
+            raise ValueError("controls must have the same shape as spots.")
+        if any(sigma <= 0 for sigma in self.model.volatilities):
+            raise ValueError("Delta recovery requires strictly positive volatilities.")
+        diffusion = self.diffusion(values)
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            singular = np.linalg.svd(diffusion, compute_uv=False)
+            if np.any(singular[..., -1] <= 0):
+                raise ValueError("Delta recovery requires a nonsingular diffusion.")
+            deltas = np.linalg.solve(np.swapaxes(diffusion, -1, -2), controls[..., None])[..., 0]
+            reconstructed = self.control(values, deltas)
+            residual = np.linalg.norm(reconstructed-controls, axis=-1)
+            magnitude = np.linalg.norm(controls, axis=-1)
+            relative = np.divide(residual, magnitude, out=np.zeros_like(residual), where=magnitude > 0)
+            smallest = singular[..., -1]
+            condition = singular[..., 0]/smallest
+            inverse = 1/smallest
+        arrays = [np.asarray(a) for a in (deltas, reconstructed, residual, relative, condition, smallest, inverse)]
+        if not all(np.isfinite(a).all() for a in arrays):
+            raise ArithmeticError("Delta recovery exceeded floating-point range.")
+        for array in arrays:
+            array.setflags(write=False)
+        return ControlRecovery(*arrays)
 
 
 @dataclass(frozen=True)

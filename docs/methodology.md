@@ -1254,3 +1254,104 @@ The selected initial price is 9.4069423698, against 9.4134033839 analytically, g
 Review of [ada17ea](https://github.com/KVInator/deep-bsde-pricing/commit/ada17ea8e594b624b3bce25085aa436b94495c89) confirms an outputs-only notebook commit with unchanged source, 17 sequential code cells, 11 complete figures and no recorded error or stderr output. The first eight figures are preserved byte for byte; the three terminal-solver figures are reviewed in full. Selected/final checkpoint reload checks complete without error. The separate 512-path descriptive sample has discounted terminal RMSE 2.543842, mean residual -0.138158 with standard error 0.112367, and matched analytical-control RMSE 2.096407.
 
 The figures retain negative propagated values, terminal tail errors and differences from analytical conditional-value paths. The small initial-price error is confirmed, while accurate controls, recovered Greeks, seed robustness and a computational advantage remain unestablished. This completes verification of the first terminal-loss experiment without extending its budget or replacing its retained results.
+
+
+## Common price and risk evaluation
+
+### Frozen models and a common contract
+
+The comparison uses two already selected checkpoints: seed 2026 with terminal weight one from the value-gradient reproducibility study, selected at update 2,400, and the first terminal-loss run, selected at update 2,800. Each training run completed 3,000 updates. Selection follows each formulation's previously declared validation objective. No new training, seed selection or tuning is performed for the comparison. The original final-update value-gradient experiment remains a separate retained result.
+
+`SolverRiskComparison` requires identical model parameters, contract, starting states and time grids. `compare_saved_runs` loads the declared directories, checks initial outputs and financial/configuration metadata against their source reports, and retains model/report SHA-256 digests, selection rules, update counts, fitting/evaluation times and training runtimes. A changed report or checkpoint is therefore identifiable. Existing comparison destinations are rejected before loading models or evaluating paths.
+
+The default fresh sample uses 2,048 paths, 16 time intervals and seed 2031 with SeedSequence branch 4. It is separate from the fitting, validation, saved post-training and descriptive branch-3 streams. Both solvers use the exact same spot states for every pre-expiry risk comparison. The report and `paths.npz` preserve these states, reference deltas, both predicted delta/control arrays and diffusion diagnostics. Loading the archive disables pickle and validates dimensions and finite float64 values. These exploratory results must not subsequently be described as an untouched confirmatory test after they have informed development choices.
+
+### Control-to-delta recovery
+
+For independent Brownian coordinates, the physical diffusion is
+
+\[
+\Sigma(s)=\operatorname{diag}(\sigma_i s_i)L,\qquad LL^\top=\rho,
+\qquad Z=\Sigma(s)^\top\Delta.
+\]
+
+The domain-level inverse is `PricingBSDE.recover_deltas`. It solves the square transposed system with [NumPy's batched linear solve](https://numpy.org/doc/stable/reference/generated/numpy.linalg.solve.html), rather than forming an explicit inverse. The right-hand side retains a trailing singleton column so batched vector semantics are explicit. Positive spots and strictly positive volatilities are required for this inverse; the model's correlation contract already requires positive definiteness. Singular maps are rejected without a pseudoinverse, clipping or regularisation.
+
+The terminal solver learns \(\bar Z=e^{-rt}Z\), so its control must be undiscounted before solving:
+
+\[
+Z_t=e^{rt}\bar Z_t,\qquad
+\Delta_t=\Sigma(S_t)^{-\top}e^{rt}\bar Z_t.
+\]
+
+For the scalar case this reduces to \(\Delta_t=e^{rt}\bar Z_t/(\sigma S_t)\). At inception, \(\sigma S_0=20\), and the learned terminal control 11.82480928 gives delta 0.59124046. Treating this control as a delta, omitting the diffusion scale or omitting discount conversion at later times would give different and incorrect sensitivities.
+
+The value-gradient solver supplies \(\partial_S V_\theta\) through the existing physical-coordinate derivative helper. Its Brownian control is then reconstructed with the existing `PricingBSDE.control` map. Applying the common inverse to that control checks the map orientation and reconstruction. Neither numerical round-trip agreement nor a tiny reconstruction residual establishes that a learned control is close to its analytical target.
+
+For recovered \(\widehat\Delta\), report Euclidean residual \(\|\Sigma^\top\widehat\Delta-Z\|_2\), its relative value when \(\|Z\|_2>0\), the smallest diffusion singular value, the 2-norm condition number and the inverse norm. A zero supplied control has zero delta and zero absolute/relative residual under the nonsingular contract. The singular values give
+
+\[
+\kappa_2(\Sigma)=s_{\max}/s_{\min},\qquad
+\|\Sigma^{-\top}\|_2=1/s_{\min}.
+\]
+
+The [NumPy condition-number documentation](https://numpy.org/doc/stable/reference/generated/numpy.linalg.cond.html) specifies the SVD-based 2-norm convention. For a fixed diffusion, a control perturbation satisfies
+
+\[
+\|\delta\Delta\|_2\leq\|\Sigma^{-\top}\|_2\|\delta Z\|_2.
+\]
+
+A scalar nonzero diffusion has condition number one at every scale. It can still have a large inverse norm, so the condition number alone does not describe absolute sensitivity. In this base case the initial inverse norm is 0.05. Across sampled pre-expiry states, the smallest diffusion singular value is 10.40827895 and the maximum inverse norm is 0.09607736. Condition numbers remain one. Unit checks separately cover a tiny positive scalar diffusion and a near-singular two-asset correlation, retaining their amplification diagnostics without repair.
+
+### Independent risk errors and gamma
+
+Initial price and delta are deterministic outputs from each frozen model. Both are compared with the same analytical price 9.4134033839 and delta 0.5987063257. Their errors do not have Monte Carlo standard errors. The existing pilot absolute-error bands, 0.25 for price and 0.02 for delta, remain inspection targets rather than checkpoint-selection criteria or a guarantee of practical precision.
+
+The common sample measures delta RMSE over every path and pre-expiry time point. Mean signed delta errors average within each path first, then use the standard deviation of independent path averages divided by the square root of path count. The resulting standard error measures conditional evaluation sampling uncertainty, not training-seed variability. Call delta bounds are \(0\leq\Delta(t,S)\leq e^{-q(T-t)}\); violations use a 1e-10 allowance for roundoff. Counts and extrema retain tail failures. The denominator is 32,768 correlated path/time evaluations, including repeated initial states, rather than that many independent observations.
+
+Only the value-gradient representation supplies a global differentiable price map. Its initial gamma is the physical spot entry of the Hessian from `value_derivatives`. Numerical consistency is checked with central bumps of the same network's delta at relative spot increments 0.01, 0.005 and 0.001:
+
+\[
+\Gamma_{\mathrm{bump}}(h)=\frac{\Delta_\theta(0,S_0+h)-\Delta_\theta(0,S_0-h)}{2h}.
+\]
+
+These bumps verify differentiation of this learned function; they do not establish accurate risk after retraining at another start or under changed financial parameters. Analytical gamma is an independent comparison. The terminal representation has a fixed-start initial scalar and time-step controls; no comparable global price Hessian is reported. Differentiating its free scalar with respect to spot would not recover gamma.
+
+### Measured saved-model results
+
+The development comparison uses Linux, Python 3.12.14, NumPy 2.3.5, PyTorch 2.15.0+cpu, CPU float64 and one Torch thread during model evaluation. Both source runs use the declared seed and full pilot budget; their parameter counts differ, 337 for the value-gradient network and 4,817 for the terminal-loss network.
+
+| Quantity | Value-gradient selected model | Terminal-loss selected model |
+| --- | ---: | ---: |
+| Selected update | 2,400 | 2,800 |
+| Initial price | 9.56716227 | 9.40694237 |
+| Initial price error | +0.15375889 | -0.00646101 |
+| Initial delta | 0.51599016 | 0.59124046 |
+| Initial delta error | -0.08271617 | -0.00746586 |
+| Initial Brownian control | 10.31980314 | 11.82480928 |
+| Matched-state delta RMSE | 0.11278521 | 0.08397111 |
+| Mean signed delta error | -0.01199854 | +0.00144648 |
+| SE of mean signed delta error | 0.00163724 | 0.00104682 |
+| Minimum sampled delta | -0.10486636 | -1.28194162 |
+| Maximum sampled delta | 1.18282376 | 1.22801393 |
+| Maximum absolute delta error | 0.88081526 | 1.28194162 |
+| Bound violations / path-time evaluations | 1,541 / 32,768 | 3,136 / 32,768 |
+
+The terminal model meets both initial inspection targets in this retained comparison; the value-gradient model meets the price target and misses the delta target. The terminal model also has lower average squared delta error on matched states, but more sampled bound violations and a larger worst absolute error. Its low-spot tails include strongly negative deltas. These observations rule out interpreting the smaller RMSE or the accurate initial point as uniformly accurate risk. Both methods' unprojected predictions remain visible.
+
+Control reconstruction residuals are at floating-point scale. The maximum absolute residual across sampled states is 7.1e-15 for both models, with maximum relative residuals below 3.0e-16. The small numerical residual and moderate inverse scale indicate that the observed discrepancies concern the learned risks rather than an inaccurate linear solve in this base case.
+
+Value-gradient initial gamma is 0.0057837158, against 0.0193334058 analytically, with error -0.0135496900. Central delta-bump gamma differs from its autograd value by -7.90e-8, -1.97e-8 and -7.86e-10 as the spot bump decreases from 1 to 0.5 to 0.1. Thus the network derivative is internally consistent while its curvature is substantially wrong relative to the independent solution. This gamma diagnostic has no newly invented pass target.
+
+### Timing scope and reproduction
+
+The report retains two initial-inference warmups and five measured repeats for each model. The workload includes price, delta, control mapping/recovery and diffusion diagnostics; it excludes checkpoint loading, references, path generation and training. A separate single-batch timer covers all matched-state model risk evaluations and recovery, excluding path generation and analytical references. Gamma evaluation has a separate timer and is excluded from the common initial price/delta workload. The caller's Torch thread count is restored.
+
+In the recorded workspace comparison, median initial evaluation times are approximately 0.568 ms for value-gradient and 0.221 ms for terminal loss, with matched-state batches taking 0.05669 and 0.03909 seconds. All raw repeats remain in the report. These short measurements are descriptive, include diagnostic overhead and do not establish a stable latency ratio. Source fitting times, configurations, update counts and environment records are also retained. Different parameter counts, objectives, errors and fitting workloads prevent an unqualified end-to-end speedup claim. A broader cost/precision study remains later work.
+
+```bash
+python -m bsde_pricing compare-risk --run-dir scratch/runs/vanilla_risk_comparison
+python -m unittest discover -s tests -v
+```
+
+`--value-run` and `--terminal-run` explicitly select existing run directories; defaults point to the two declared selected checkpoints. No training is performed. The comparison writes a new `report.json` and compressed `paths.npz`; it preserves all source checkpoints and reports. The notebook appends initial price/delta/gamma views, matched-state risk curves, tail-error and inverse-diffusion views, derivative checks and timing/provenance tables. All 84 tests pass without warnings, including a hand-worked correlated inverse, singular rejection, amplification diagnostics, analytical price/delta/gamma checks, discount unwinding, matched-state metrics, saved-array round trips and no-retraining/overwrite checks. The notebook executes 21 code cells in a fresh IPython process with 14 reviewed figures. MacBook verification remains pending.

@@ -45,6 +45,21 @@ In the first development-workspace run, validation selects update 2,800. Its ini
 
 The command protects existing directories and saves selected `model.pt`, final `last_model.pt` and `report.json`. These terminal-solver checkpoints support inference; they do not contain optimiser continuation state. The neural notebook adds terminal learning curves, residual distributions and propagated paths. The [terminal-loss specification](docs/methodology.md#terminal-loss-deep-bsde-in-one-asset) derives the discounted recurrence, scaling, stream/selection rules and scope. Control-to-delta recovery and a matched comparison of the two solvers follow separately.
 
+## Saved-model price and risk comparison
+
+```bash
+python -m bsde_pricing compare-risk --run-dir scratch/runs/vanilla_risk_comparison
+```
+
+The comparison loads the selected seed-2026, weight-one value-gradient checkpoint and the selected terminal-loss checkpoint without retraining. The terminal solver's discounted control is first undiscounted, then delta is recovered by solving the transposed diffusion system. Both models are evaluated on the same 2,048 fresh paths and 16-interval grid.
+
+| Selected model | Initial price error | Initial delta error | Matched-state delta RMSE |
+| --- | ---: | ---: | ---: |
+| Value-gradient | +0.15375889 | -0.08271617 | 0.11278521 |
+| Terminal loss | -0.00646101 | -0.00746586 | 0.08397111 |
+
+The terminal model meets both initial inspection targets in this one-seed comparison. Tail risk remains inaccurate: it violates call delta bounds at 3,136 of 32,768 sampled path/time points, versus 1,541 for the value-gradient model. The value-gradient initial gamma is 0.00578372 against 0.01933341 analytically; finite delta bumps agree with its automatic derivative. Reconstruction residuals are at floating-point scale and do not certify the learned controls. The [common risk evaluation](docs/methodology.md#common-price-and-risk-evaluation) records selection provenance, diffusion conditioning, numerical checks and timing scope. The notebook retains raw state slices and tail errors. These are frozen single-seed models with different parameter counts, not a robust solver or speed ranking.
+
 ## Environment
 
 ```bash

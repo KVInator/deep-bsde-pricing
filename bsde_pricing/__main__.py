@@ -229,6 +229,12 @@ def main() -> None:
     terminal_train.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_terminal_bsde"))
     terminal_train.add_argument("--iterations", type=int, default=3000)
     terminal_train.add_argument("--seed", type=int, default=2026)
+    risk = commands.add_parser("compare-risk", help="compare saved scalar models and recover control-based deltas")
+    risk.add_argument("--value-run", type=Path, default=Path("scratch/runs/reproducibility/seed_2026_weight_1"))
+    risk.add_argument("--terminal-run", type=Path, default=Path("scratch/runs/vanilla_terminal_bsde"))
+    risk.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_risk_comparison"))
+    risk.add_argument("--paths", type=int, default=2048)
+    risk.add_argument("--seed", type=int, default=2031)
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss):
         command.add_argument(
@@ -237,6 +243,16 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "compare-risk":
+            from .risk_comparison import compare_saved_runs
+
+            result = compare_saved_runs(args.value_run, args.terminal_run, args.run_dir,
+                                        n_paths=args.paths, seed=args.seed)
+            print(json.dumps({"run_directory": str(args.run_dir), "models": result.report["models"],
+                              "value_gradient_gamma": result.report["value_gradient_gamma"],
+                              "targets_met": result.report["targets_met"]},
+                             indent=2, sort_keys=True, allow_nan=False))
+            return
         if args.command == "train-terminal":
             from .problems import vanilla_case
             from .terminal_bsde import train_terminal_and_save
