@@ -212,3 +212,58 @@ For the base case with 100,000 samples, seed 2026 and PCG64:
 | Positive payoffs | 52,137 |
 
 Reproduction: `python -m bsde_pricing monte-carlo --case vanilla --paths 100000 --seed 2026`. This is an introductory simulation check; its interval half-width is larger than the later reference-error budget. Stronger variance reduction is introduced before the high-dimensional reference study.
+
+## Independent Monte Carlo delta
+
+For fixed model parameters, write $S_T=S_0R_T$, where $R_T$ is the random GBM growth factor independent of initial spot. Therefore $\partial S_T/\partial S_0=S_T/S_0$. A call payoff has derivative $\mathbf1_{\{S_T>K\}}$ with respect to its terminal argument away from the strike. For positive volatility and time to expiry, the terminal law is continuous and the strike event has probability zero. The call is Lipschitz, and the relevant payoff difference quotients are bounded by the integrable $R_T$; dominated convergence justifies exchanging differentiation and expectation in this case.
+
+Thus the pathwise delta estimator is
+
+$$
+\widehat\Delta_{\mathrm{PW}}=\frac1N\sum_iD_i,
+\qquad D_i=e^{-r\tau}\mathbf1_{\{S_T^{(i)}>K\}}
+\frac{S_T^{(i)}}{S_0}.
+$$
+
+Its estimated standard error is $s_D/\sqrt N$. It uses the terminal model states, not the analytical Greek. The model-specific derivative identity is essential; it must be rederived for different dynamics or parameter sensitivities. The [pathwise-Greeks section of Pricing and Hedging Derivative Securities](https://book.derivative-securities.org/Chapter_MonteCarlo.html#monte-carlo-greeks-ii-pathwise-estimates) provides the underlying estimator argument.
+
+### Common-random-number check
+
+A second calculation uses initial spots $S_0+h$ and $S_0-h$, retaining the same growth factors for both valuations. Under GBM, their terminal states are $(1+h/S_0)S_T$ and $(1-h/S_0)S_T$. The paired central-bump contributions are
+
+$$
+B_i(h)=e^{-r\tau}
+\frac{g((1+h/S_0)S_T^{(i)})-g((1-h/S_0)S_T^{(i)})}{2h}.
+$$
+
+The estimate is the sample mean of $B_i(h)$, and its standard error comes from those paired contributions. Using independent random samples for the up/down values would introduce unnecessary difference noise. A finite bump targets the price secant $(C(S_0+h)-C(S_0-h))/(2h)$, rather than the exact derivative. For the smooth positive-volatility price, the central-bump bias is of order $h^2$ locally. Shrinking $h$ also exposes rounding and subtraction error, so an arbitrarily small bump is not an accuracy guarantee.
+
+The pathwise and bump estimates are correlated because they share terminal draws. Consequently their discrepancy is assessed from $D_i-B_i(h)$ and its sample variance:
+
+$$
+\widehat{\mathrm{SE}}_{\mathrm{difference}}
+=\frac{s_{D-B}}{\sqrt N}.
+$$
+
+Adding their separate variances as if independent would omit the covariance. The mean difference also contains the finite-bump bias, so its true expectation need not be zero. `bump_crossing_count` records how many paired terminal states change exercise status under the bump. Those paths explain the substantive difference between the estimators; elsewhere both calculations agree path by path up to floating-point rounding. With very few crossing paths, the normal approximation for the paired discrepancy can be unreliable even when the overall sample count is large.
+
+### Scope and checks
+
+`MonteCarloPricer.estimate_delta()` supports a single asset and unit contract weight, using the existing terminal sampler. One statistics implementation serves price, pathwise delta, central-bump delta and paired differences. The price command retains its previous output fields. Each delta report records sample size, seed, generator, time, relative/absolute bump and sampling uncertainty.
+
+Zero observed stochastic variance continues to withhold confidence bounds. At expiry or zero volatility, an off-boundary pathwise delta is the deterministic discounted payoff slope; at the exercise kink it is undefined and rejected. A finite bump can cross a deterministic kink even when the base point is off-boundary, in which case the secant differs from the derivative. Bumps must be finite, strictly between zero and one as a fraction of spot, and large enough to produce distinct positive starting spots.
+
+Tests compare pathwise delta with the analytical derivative, including dividends and a negative rate. Common-random-number bumps are checked against both separate repricing with matched seeds and the analytical price secant at several bump sizes. Paired discrepancies are compared with the analytical derivative-minus-secant, preserving the finite-bump bias. Deterministic limits, undefined kinks and invalid bump sizes are checked explicitly.
+
+Naively differentiating the pathwise delta sample again does not provide a valid gamma estimator. The exercise indicator changes across a moving boundary; discarding its boundary contribution can give zero sample derivatives while the price has positive curvature. Gamma verification therefore retains the separate analytical reference and, later, controlled numerical checks.
+
+For 100,000 samples, seed 2026 and relative bump 0.001 ($h=0.1$):
+
+| Quantity | Estimate | Estimated standard error |
+| --- | ---: | ---: |
+| Pathwise delta | 0.599857759975 | 0.001849227795 |
+| Central-bump delta | 0.599874155865 | 0.001847454149 |
+| Paired difference, pathwise minus bump | -0.000016395890 | 0.000057981025 |
+| Analytical delta | 0.598706325683 | Not applicable |
+
+There are 424 bump-crossing paths in this run. Reproduction: `python -m bsde_pricing monte-carlo --quantity delta --case vanilla --paths 100000 --seed 2026`.
