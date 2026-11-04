@@ -1436,4 +1436,12 @@ python -m bsde_pricing compare-risk \
 python -m unittest discover -s tests -v
 ```
 
-All 85 tests pass in the development workspace. The five-asset integration test fits and reloads both models, reloads the common archive, checks all coordinate references with central price bumps, and checks the vector reconstruction with an independently assembled diffusion. Re-running the vanilla comparison from the original checkpoints reproduces all archive arrays and the non-timing report exactly. The notebook adds three code cells and two figures covering coordinate accuracy, errors over time and bounds. MacBook verification is pending.
+All 85 tests pass in the development workspace. The five-asset integration test fits and reloads both models, reloads the common archive, checks all coordinate references with central price bumps, and checks the vector reconstruction with an independently assembled diffusion. Re-running the vanilla comparison from the original checkpoints reproduces all archive arrays and the non-timing report exactly. The notebook adds three code cells and two figures covering coordinate accuracy, errors over time and bounds.
+
+### MacBook verification
+
+The MacBook run completes both 3,000-update fits. Value-gradient takes 9.0582 seconds and selects update 3,000. Terminal loss takes 15.0891 seconds and selects update 2,700. All 85 tests pass in 2.818 seconds. The run uses macOS 27.0.1 ARM64, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 with one CPU thread and float64. The comparison report agrees with the terminal output. Its price, delta, tail and diffusion metrics agree with the workspace within approximately 1.2e-14.
+
+Terminal loss meets the price band and all five initial delta bands. It also has 14,107 bound violations versus 7,484 for value-gradient, and a larger worst delta error. The two risk figures retain the crossover in per-time RMSE at 0.6875 years and the larger terminal-model RMSE near expiry. The maximum absolute reconstruction residual remains below 5.7e-15 on the MacBook.
+
+The notebook has 24 sequential code cells and 16 figures with no error or stderr outputs. The two new figures and seven tables agree with the report, and the first 14 figures match the earlier reviewed outputs byte for byte. The notebook commit contains the executed results. [b294e4c](https://github.com/KVInator/deep-bsde-pricing/commit/b294e4c096fb0582f221e621a52509388199990f)
