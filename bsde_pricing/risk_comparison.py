@@ -1,4 +1,4 @@
-"""Saved-model price/risk comparison on common scalar GBM states."""
+"""Saved-model price and risk comparison on common GBM states."""
 
 import hashlib
 import json
@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from .bsde import ControlRecovery, PricingBSDE
+from .geometric_basket import reference_deltas_on_grid
 from .neural import value_derivatives
 from .terminal_bsde import TerminalBSDESolver
 from .training import FBSNNSolver, sample_training_paths
@@ -41,9 +42,11 @@ class RiskComparisonResult:
     report: dict[str, object]
 
     def __post_init__(self):
+        dimension = len(self.report["problem"]["initial_spots"])
+        asset_shape = () if dimension == 1 else (dimension,)
         if (self.times.ndim != 1 or len(self.times) < 2 or self.times[0] != 0
-                or np.any(np.diff(self.times) <= 0) or self.spots.ndim != 2
-                or self.spots.shape[0] < 2 or self.spots.shape[1] != len(self.times)
+                or np.any(np.diff(self.times) <= 0) or self.spots.ndim != 2+len(asset_shape)
+                or self.spots.shape[0] < 2 or self.spots.shape[1:] != (len(self.times), *asset_shape)
                 or np.any(self.spots <= 0)):
             raise ValueError("Inconsistent comparison times or states.")
         if self.report["n_paths"] != len(self.spots) or self.report["n_steps"] != len(self.times)-1:
@@ -51,8 +54,12 @@ class RiskComparisonResult:
         for field in fields(self):
             if field.name == "report": continue
             array = getattr(self, field.name)
-            if field.name not in ("times", "spots") and array.shape != (len(self.spots), len(self.times)-1):
-                raise ValueError("Comparison risk arrays must have shape (N,M).")
+            if field.name not in ("times", "spots"):
+                shape = (len(self.spots), len(self.times)-1)
+                if field.name not in ("condition_numbers", "inverse_norms"):
+                    shape += asset_shape
+                if array.shape != shape:
+                    raise ValueError("Comparison risk arrays disagree with the path grid or dimension.")
             if array.dtype != np.float64 or not np.isfinite(array).all():
                 raise ValueError("Comparison arrays must be finite float64 data.")
             array.setflags(write=False)
@@ -68,7 +75,9 @@ class RiskComparisonResult:
     def load(cls, directory: Path) -> "RiskComparisonResult":
         directory = Path(directory)
         report = json.loads((directory/"report.json").read_text())
-        if report.get("method") != "saved_scalar_solver_risk_comparison":
+        if report.get("method") not in (
+            "saved_scalar_solver_risk_comparison", "saved_geometric_solver_risk_comparison",
+        ):
             raise ValueError("Unsupported risk-comparison report.")
         with np.load(directory/"paths.npz", allow_pickle=False) as data:
             arrays = {f.name: data[f.name].copy() for f in fields(cls) if f.name != "report"}
@@ -76,11 +85,11 @@ class RiskComparisonResult:
 
 
 class SolverRiskComparison:
-    """Evaluate fixed, already selected scalar models without retraining.
+    """Evaluate selected vanilla or geometric models on a common grid.
 
     The terminal controls are undiscounted before diffusion inversion. The
     value-gradient delta is differentiated from its value map. A separate
-    initial gamma diagnostic is available only for the value-gradient model.
+    initial gamma diagnostic is available for the scalar value-gradient model.
     """
 
     def __init__(self, value_solver: FBSNNSolver, terminal_solver: TerminalBSDESolver):
@@ -94,31 +103,39 @@ class SolverRiskComparison:
         self.problem = PricingBSDE(a.model, a.contract)
         self.reference = value_solver.reference
         self.n_steps = value_solver.config.n_steps
+        self.dimension = a.model.dimension
+
+    def _coordinate_shape(self, array: np.ndarray) -> np.ndarray:
+        """Keep the published scalar report and archive shapes."""
+        return array[..., 0] if self.dimension == 1 else array
 
     def _initial(self, kind: str) -> dict[str, object]:
         spots = np.array(self.case.initial_spots, dtype=np.float64)
         if kind == "value_gradient":
             point = torch.tensor([[0, *self.case.initial_spots]], dtype=torch.float64, device="cpu")
             prediction = value_derivatives(self.value.network, point, compute_hessian=False)
-            price, delta = float(prediction.values[0, 0]), float(prediction.gradient[0, 1])
-            control = self.problem.control(spots, np.array([delta]))
+            price = float(prediction.values[0, 0])
+            delta = prediction.gradient[0, 1:].numpy()
+            control = self.problem.control(spots, delta)
         else:
             network = self.terminal.network
             price = float((network.value_scale*network.initial_value).detach())
-            control = np.array([float((network.control_scale*network.initial_control).detach())])
+            control = (network.control_scale*network.initial_control).detach().numpy().reshape(self.dimension)
             delta = None
         recovery = self.problem.recover_deltas(spots, control)
         if delta is None:
-            delta = float(recovery.deltas[0])
-        return {"price": price, "delta": delta, "brownian_control": float(control[0]),
-                "recovered_delta": float(recovery.deltas[0]), "reconstruction": _recovery_summary(recovery)}
+            delta = recovery.deltas
+        return {"price": price, "delta": self._coordinate_shape(delta).tolist(),
+                "brownian_control": self._coordinate_shape(control).tolist(),
+                "recovered_delta": self._coordinate_shape(recovery.deltas).tolist(),
+                "reconstruction": _recovery_summary(recovery)}
 
     def _path_risk(self, kind: str, times: np.ndarray, states: torch.Tensor):
         if kind == "value_gradient":
             n_paths = len(states)
             inputs = torch.cat((torch.from_numpy(times[:-1]).expand(n_paths, -1)[..., None], states[:, :-1]), dim=2)
-            prediction = value_derivatives(self.value.network, inputs.reshape(-1, 2), compute_hessian=False)
-            deltas = prediction.gradient[:, 1].numpy().reshape(n_paths, self.n_steps, 1)
+            prediction = value_derivatives(self.value.network, inputs.reshape(-1, self.dimension+1), compute_hessian=False)
+            deltas = prediction.gradient[:, 1:].numpy().reshape(n_paths, self.n_steps, self.dimension)
             controls = self.problem.control(states[:, :-1].numpy(), deltas)
         else:
             with torch.no_grad():
@@ -128,7 +145,7 @@ class SolverRiskComparison:
         recovery = self.problem.recover_deltas(states[:, :-1].numpy(), controls)
         if deltas is None:
             deltas = recovery.deltas
-        return deltas[:, :, 0], controls[:, :, 0], recovery
+        return deltas, controls, recovery
 
     def _gamma(self) -> dict[str, object]:
         spot = self.case.initial_spots[0]
@@ -157,10 +174,21 @@ class SolverRiskComparison:
         times = np.linspace(0, self.case.contract.maturity, self.n_steps+1)
         rng = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(4,)))
         states, _ = sample_training_paths(self.case, self.n_steps, rng, n_paths)
-        reference_deltas = np.column_stack([
-            self.reference.call_delta_array(states[:, m, 0].numpy(), t) for m, t in enumerate(times[:-1])])
-        reference_controls = self.problem.control(states[:, :-1].numpy(), reference_deltas[..., None])[:, :, 0]
-        target = self.reference.evaluate(self.case.initial_spots[0])
+        spots = states.numpy()
+        left_spots = spots[:, :-1]
+        reference_deltas = reference_deltas_on_grid(self.reference, spots, times)
+        reference_controls = self.problem.control(left_spots, reference_deltas)
+        tau = self.case.contract.maturity-times[:-1]
+        if self.dimension == 1:
+            target = self.reference.evaluate(self.case.initial_spots[0])
+            initial_reference_delta = target.call_delta
+            upper_delta = np.exp(-self.case.model.dividend_yields[0]*tau)[None, :, None]
+        else:
+            target = self.reference.evaluate(self.case.initial_spots)
+            initial_reference_delta = list(target.call_deltas)
+            basket = self.case.contract.basket_value(left_spots)
+            upper_delta = ((np.exp(-target.effective_dividend_yield*tau)*basket)[..., None]
+                           * np.asarray(self.case.contract.weights)/left_spots)
         models, arrays = {}, {}
         previous_threads = torch.get_num_threads()
         try:
@@ -172,16 +200,16 @@ class SolverRiskComparison:
                     started = time.perf_counter()
                     initial = self._initial(kind)
                     durations.append(time.perf_counter()-started)
-                initial.update(reference_price=target.call_price, reference_delta=target.call_delta,
-                               price_error=initial["price"]-target.call_price, delta_error=initial["delta"]-target.call_delta)
+                initial.update(reference_price=target.call_price, reference_delta=initial_reference_delta,
+                               price_error=initial["price"]-target.call_price,
+                               delta_error=(np.asarray(initial["delta"])-initial_reference_delta).tolist())
                 started = time.perf_counter()
                 deltas, controls, recovery = self._path_risk(kind, times, states)
                 path_seconds = time.perf_counter()-started
                 errors = deltas-reference_deltas
-                means = errors.mean(axis=1)
-                upper_delta = np.exp(-self.case.model.dividend_yields[0]*(self.case.contract.maturity-times[:-1]))
-                violations = (deltas < -1e-10) | (deltas > upper_delta[None, :]+1e-10)
-                arrays[kind] = (deltas.copy(), controls.copy())
+                means = errors.reshape(n_paths, -1).mean(axis=1)
+                violations = (deltas < -1e-10) | (deltas > upper_delta+1e-10)
+                arrays[kind] = tuple(self._coordinate_shape(a).copy() for a in (deltas, controls))
                 models[kind] = {
                     "initial": initial, "parameter_count": sum(p.numel() for p in solver.network.parameters()),
                     "path_delta_rmse": float(np.sqrt(np.mean(errors**2))),
@@ -195,12 +223,19 @@ class SolverRiskComparison:
                     "timing": {"initial_seconds": durations, "initial_median_seconds": float(np.median(durations)),
                                "warmups": 2, "repeats": 5, "path_risk_seconds": path_seconds,
                                "initial_workload": "price_delta_control_and_diffusion_diagnostics_no_reference"}}
-            gamma = self._gamma()
+                if self.dimension > 1:
+                    models[kind].update(
+                        path_delta_rmse_by_coordinate=np.sqrt(np.mean(errors**2, axis=(0, 1))).tolist(),
+                        max_absolute_path_delta_error_by_coordinate=np.max(np.abs(errors), axis=(0, 1)).tolist(),
+                        delta_bound_violations_by_coordinate=np.count_nonzero(violations, axis=(0, 1)).tolist(),
+                    )
+            gamma = self._gamma() if self.dimension == 1 else None
         finally:
             torch.set_num_threads(previous_threads)
         value, terminal = arrays["value_gradient"], arrays["terminal_loss"]
-        diffusion = self.problem.recover_deltas(states[:, :-1].numpy(), reference_controls[..., None])
-        report = {"method": "saved_scalar_solver_risk_comparison", "problem": json.loads(self.case.to_json()),
+        diffusion = self.problem.recover_deltas(left_spots, reference_controls)
+        kind = "scalar" if self.dimension == 1 else "geometric"
+        report = {"method": f"saved_{kind}_solver_risk_comparison", "problem": json.loads(self.case.to_json()),
                   "n_paths": n_paths, "n_steps": self.n_steps, "seed": seed, "seed_sequence_branch": 4,
                   "bit_generator": "PCG64", "trained_during_comparison": False,
                   "device": "cpu", "dtype": "torch.float64", "cpu_threads": 1,
@@ -209,9 +244,11 @@ class SolverRiskComparison:
                   "terminal_gamma": None, "terminal_gamma_reason": "fixed-start control representation; no global price Hessian",
                   "inspection_targets": {"price_absolute_error": 0.25, "delta_absolute_error": 0.02},
                   "targets_met": {k: {"price": abs(v["initial"]["price_error"]) <= 0.25,
-                                      "delta": abs(v["initial"]["delta_error"]) <= 0.02} for k, v in models.items()}}
-        return RiskComparisonResult(times, states[:, :, 0].numpy().copy(), reference_deltas, value[0], terminal[0],
-                                    reference_controls, value[1], terminal[1], diffusion.condition_number.copy(),
+                                      "delta": bool(np.max(np.abs(v["initial"]["delta_error"])) <= 0.02)}
+                                  for k, v in models.items()}}
+        return RiskComparisonResult(times, self._coordinate_shape(spots).copy(), self._coordinate_shape(reference_deltas),
+                                    value[0], terminal[0], self._coordinate_shape(reference_controls),
+                                    value[1], terminal[1], diffusion.condition_number.copy(),
                                     diffusion.inverse_norm.copy(), report)
 
 
@@ -232,7 +269,9 @@ def compare_saved_runs(value_directory: Path, terminal_directory: Path, output: 
         keys = (("price", "price"), ("delta", "delta")) if kind == "value_gradient" else (
             ("price", "price"), ("brownian_control", "discounted_initial_control"))
         for result_key, source_key in keys:
-            if not math.isclose(initial[result_key], source["evaluation"]["initial"][source_key], rel_tol=0, abs_tol=1e-10):
+            actual = np.asarray(initial[result_key])
+            recorded = np.asarray(source["evaluation"]["initial"][source_key])
+            if actual.shape != recorded.shape or not np.allclose(actual, recorded, rtol=0, atol=1e-10):
                 raise ValueError("Saved model and source evaluation disagree.")
         solver = value if kind == "value_gradient" else terminal
         if source["config"] != solver.config.__dict__ or source["problem"] != json.loads(solver.case.to_json()):

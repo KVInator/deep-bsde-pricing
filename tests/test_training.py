@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from bsde_pricing.analytical_torch import AnalyticalCall
-from bsde_pricing.problems import vanilla_case, geometric_case
+from bsde_pricing.problems import vanilla_case, correlated_case
 from bsde_pricing.training import FBSNNSolver, TrainingConfig, train_and_save
 
 
@@ -92,7 +92,7 @@ class TrainingTests(unittest.TestCase):
         for kwargs in ({'iterations': True}, {'n_steps': 0}, {'evaluation_paths': 1},
                        {'learning_rate': float('nan')}, {'max_seconds': -1}, {'seed': -1}):
             with self.assertRaises(ValueError): TrainingConfig(**kwargs)
-        with self.assertRaises(ValueError): FBSNNSolver(geometric_case(), self.config)
+        with self.assertRaises(ValueError): FBSNNSolver(correlated_case(), self.config)
         with tempfile.TemporaryDirectory(dir='scratch/tests') as temp:
             directory = Path(temp)/'failed_run'
             with patch.object(FBSNNSolver, 'fit', side_effect=ArithmeticError('nonfinite loss')):

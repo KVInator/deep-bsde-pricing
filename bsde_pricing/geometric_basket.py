@@ -4,10 +4,10 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from .black_scholes import BlackScholesReference
-from .problems import EuropeanCall, GBMModel, _finite_vector
+from .problems import EuropeanCall, GBMModel, PricingCase, _finite_array, _finite_vector
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,17 @@ class GeometricBasketReference:
         object.__setattr__(self, "_scalar_reference",
                            BlackScholesReference(scalar_model, scalar_contract))
 
+    def call_delta_array(self, spots: ArrayLike, time: float = 0.0) -> NDArray[np.float64]:
+        """Return pre-expiry coordinate deltas for spots of shape (..., d)."""
+        spots = _finite_array(spots, "spots")
+        if (spots.ndim < 1 or spots.shape[-1] != self.model.dimension
+                or not spots.size or np.any(spots <= 0)):
+            raise ValueError("Spots must be positive with shape (..., dimension).")
+        basket = self.contract.basket_value(spots)
+        basket_delta = self._scalar_reference.call_delta_array(basket, time)
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            return (basket_delta*basket)[..., None]*np.asarray(self.contract.weights)/spots
+
     def evaluate(self, spots: ArrayLike, time: float = 0.0) -> GeometricBasketResult:
         spots = _finite_vector(spots, "spots")
         if len(spots) != self.model.dimension or any(s <= 0 for s in spots):
@@ -76,3 +87,20 @@ class GeometricBasketReference:
             self.model.rate - effective_model.dividend_yields[0],
             scalar.call_price, scalar.put_price, call_deltas, put_deltas,
         )
+
+
+def call_reference(case: PricingCase) -> BlackScholesReference | GeometricBasketReference:
+    """Exact call reference for the supported neural training cases."""
+    if case.model.dimension == 1:
+        return BlackScholesReference(case.model, case.contract)
+    return GeometricBasketReference(case.model, case.contract)
+
+
+def reference_deltas_on_grid(
+    reference: BlackScholesReference | GeometricBasketReference,
+    states: NDArray[np.float64],
+    times: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Return (paths, intervals, assets) for a grid including expiry."""
+    return np.stack([reference.call_delta_array(states[:, m], t)
+                     for m, t in enumerate(times[:-1])], axis=1)

@@ -1,4 +1,4 @@
-"""Bounded one-asset value-gradient training and checkpoint evaluation."""
+"""Bounded value-gradient training and checkpoint evaluation."""
 
 import json
 import math
@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .black_scholes import BlackScholesReference
 from .analytical_torch import AnalyticalCall
 from .bsde import PricingBSDE
 from .bsde_loss import LocalBSDELoss
+from .geometric_basket import call_reference, reference_deltas_on_grid
 from .neural import ValueNetwork, value_derivatives
 from .problems import EuropeanCall, GBMModel, PricingCase
 
@@ -82,7 +82,7 @@ class PathEvaluation:
 
 
 class FBSNNSolver:
-    """Fixed-start scalar call experiment, using CPU float64 throughout.
+    """Fixed-start vanilla and geometric call training on CPU float64.
 
     Training, checkpoint selection and evaluation use disjoint random streams.
     Selection minimises the fixed validation objective at scheduled checks.
@@ -90,8 +90,8 @@ class FBSNNSolver:
     """
 
     def __init__(self, case: PricingCase, config: TrainingConfig = TrainingConfig()):
-        self.reference = BlackScholesReference(case.model, case.contract)
-        if case.model.volatilities[0] <= 0 or case.contract.maturity <= 0:
+        self.reference = call_reference(case)
+        if min(case.model.volatilities) <= 0 or case.contract.maturity <= 0:
             raise ValueError("The training pilot requires positive maturity and volatility.")
         self.case, self.config = case, config
         self.network = ValueNetwork(case.initial_spots, case.contract.maturity,
@@ -106,40 +106,58 @@ class FBSNNSolver:
     def _batch(self, rng: np.random.Generator, n_paths: int):
         return sample_training_paths(self.case, self.config.n_steps, rng, n_paths)
 
-    def initial_value(self) -> dict[str, float]:
+    def initial_value(self) -> dict[str, float | list[float]]:
         point = torch.tensor([[0, *self.case.initial_spots]], dtype=torch.float64, device="cpu")
         result = value_derivatives(self.network, point, compute_hessian=False)
-        target = self.reference.evaluate(self.case.initial_spots[0])
-        price, delta = float(result.values[0, 0]), float(result.gradient[0, 1])
-        return {"price": price, "delta": delta, "reference_price": target.call_price,
-                "reference_delta": target.call_delta, "price_error": price-target.call_price,
-                "delta_error": delta-target.call_delta}
+        price = float(result.values[0, 0])
+        if self.case.model.dimension == 1:
+            target = self.reference.evaluate(self.case.initial_spots[0])
+            delta = float(result.gradient[0, 1])
+            return {"price": price, "delta": delta, "reference_price": target.call_price,
+                    "reference_delta": target.call_delta, "price_error": price-target.call_price,
+                    "delta_error": delta-target.call_delta}
+        target = self.reference.evaluate(self.case.initial_spots)
+        deltas = result.gradient[0, 1:].numpy()
+        return {"price": price, "delta": deltas.tolist(), "reference_price": target.call_price,
+                "reference_delta": list(target.call_deltas), "price_error": price-target.call_price,
+                "delta_error": (deltas-np.asarray(target.call_deltas)).tolist()}
 
     def _evaluate(self, rng: np.random.Generator, n_paths: int) -> PathEvaluation:
         states, increments = self._batch(rng, n_paths)
         n_steps = self.config.n_steps
+        dimension = self.case.model.dimension
         inputs = torch.cat((self.times[:-1].expand(n_paths, -1)[..., None], states[:, :-1]), dim=2)
-        prediction = value_derivatives(self.network, inputs.reshape(-1, 2), compute_hessian=False)
+        prediction = value_derivatives(self.network, inputs.reshape(-1, dimension+1), compute_hessian=False)
+        analytical = AnalyticalCall(self.case.model, self.case.contract)
+        terminal_inputs = torch.cat((self.times[-1].expand(n_paths, 1), states[:, -1]), dim=1)
         with torch.no_grad():
-            terminal = self.network(torch.cat((self.times[-1].expand(n_paths, 1), states[:, -1]), dim=1))
+            terminal = self.network(terminal_inputs)
         values = np.column_stack((prediction.values.numpy().reshape(n_paths, n_steps), terminal.numpy()))
-        deltas = prediction.gradient[:, 1].numpy().reshape(n_paths, n_steps)
-        spots = states[:, :, 0].numpy()
-        reference_values = np.empty_like(values)
-        reference_deltas = np.empty_like(deltas)
-        for index, time_point in enumerate(self.times.numpy()):
-            results = [self.reference.evaluate(float(s), float(time_point)) for s in spots[:, index]]
-            reference_values[:, index] = [r.call_price for r in results]
-            if index < n_steps:
-                reference_deltas[:, index] = [r.call_delta for r in results]
+        deltas = prediction.gradient[:, 1:].numpy().reshape(n_paths, n_steps, dimension)
+        spots = states.numpy()
+        if dimension == 1:
+            spots, deltas = spots[:, :, 0], deltas[:, :, 0]
+            reference_values = np.empty_like(values)
+            reference_deltas = np.empty_like(deltas)
+            for index, time_point in enumerate(self.times.numpy()):
+                results = [self.reference.evaluate(float(s), float(time_point)) for s in spots[:, index]]
+                reference_values[:, index] = [r.call_price for r in results]
+                if index < n_steps:
+                    reference_deltas[:, index] = [r.call_delta for r in results]
+        else:
+            with torch.no_grad():
+                reference_values = np.column_stack((
+                    analytical(inputs.reshape(-1, dimension+1)).numpy().reshape(n_paths, n_steps),
+                    analytical(terminal_inputs).numpy(),
+                ))
+            reference_deltas = reference_deltas_on_grid(self.reference, spots, self.times.numpy())
         loss = self.loss(self.network, self.times, states, increments, parameter_graph=False)
-        analytical_loss = self.loss(AnalyticalCall(self.case.model, self.case.contract),
-                                    self.times, states, increments, parameter_graph=False)
+        analytical_loss = self.loss(analytical, self.times, states, increments, parameter_graph=False)
         value_error = values[:, :-1]-reference_values[:, :-1]
         delta_error = deltas-reference_deltas
         terminal_error = values[:, -1]-reference_values[:, -1]
         path_value_means = value_error.mean(axis=1)
-        path_delta_means = delta_error.mean(axis=1)
+        path_delta_means = delta_error.reshape(n_paths, -1).mean(axis=1)
         summary = {
             "n_paths": n_paths, "initial": self.initial_value(),
             "price_rmse_before_expiry": float(np.sqrt(np.mean(value_error**2))),
@@ -300,7 +318,8 @@ class FBSNNSolver:
             "evaluation": evaluation, "last_evaluation": last_evaluation,
             "inspection_targets": {"price_absolute_error": 0.25, "delta_absolute_error": 0.02},
             "targets_met": None if initial is None else {
-                "price": abs(initial["price_error"]) <= 0.25, "delta": abs(initial["delta_error"]) <= 0.02},
+                "price": abs(initial["price_error"]) <= 0.25,
+                "delta": bool(np.max(np.abs(initial["delta_error"])) <= 0.02)},
         }
 
     def save(self, directory: Path, report: dict[str, object]) -> None:

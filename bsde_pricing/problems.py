@@ -292,3 +292,19 @@ def correlated_case() -> PricingCase:
 def geometric_case() -> PricingCase:
     case = correlated_case()
     return replace(case, name="geometric", contract=replace(case.contract, basket="geometric"))
+
+
+def geometric_five_case() -> PricingCase:
+    """Five unequal assets with positive and negative factor correlations."""
+    loadings = (0.65, 0.50, -0.35, 0.45, 0.55)
+    correlation = tuple(tuple(1.0 if i == j else a*b for j, b in enumerate(loadings))
+                        for i, a in enumerate(loadings))
+    return PricingCase(
+        name="geometric-five",
+        model=GBMModel(
+            rate=0.03, volatilities=(0.16, 0.19, 0.23, 0.26, 0.31),
+            dividend_yields=(0.005, 0.01, 0.015, 0.02, 0.025), correlation=correlation,
+        ),
+        contract=EuropeanCall(100.0, 1.0, weights=(0.10, 0.15, 0.20, 0.25, 0.30), basket="geometric"),
+        initial_spots=(90.0, 100.0, 110.0, 95.0, 105.0),
+    )

@@ -1367,3 +1367,73 @@ Maximum absolute reconstruction residual is 7.1e-15 for both models; maximum rel
 Review of [55d58c8](https://github.com/KVInator/deep-bsde-pricing/commit/55d58c87252513fe7fa88b413005d80fa952db00) confirms an outputs-only notebook commit with unchanged source, 21 sequential code cells, 14 complete figures and no error or stderr output. The first 11 figures are preserved byte for byte; the three appended risk figures are reviewed in full. Tables and plots retain negative tail deltas, upper-bound breaches, curvature error, source checkpoint choices and training costs.
 
 Recorded initial inference medians are 0.20546 ms for value-gradient and 0.07688 ms for terminal loss; the matched-state risk batches take 0.07334 and 0.06408 seconds. These short diagnostic-inclusive measurements do not establish a stable latency ratio, end-to-end speedup or robust solver ranking. This closes the saved-model risk comparison with its positive initial terminal-risk result and unresolved tail/curvature limitations retained.
+
+
+## Five-asset geometric basket
+
+### Declared case and exact reference
+
+The geometric call uses strike 100, maturity one year and continuously compounded rate 3%. The five coordinates have different economic inputs.
+
+| Asset | Spot | Weight | Volatility | Dividend yield | Correlation loading |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 90 | 0.10 | 0.16 | 0.005 | 0.65 |
+| 2 | 100 | 0.15 | 0.19 | 0.010 | 0.50 |
+| 3 | 110 | 0.20 | 0.23 | 0.015 | -0.35 |
+| 4 | 95 | 0.25 | 0.26 | 0.020 | 0.45 |
+| 5 | 105 | 0.30 | 0.31 | 0.025 | 0.55 |
+
+With loadings \(b\), the correlation matrix is \(bb^\top+\operatorname{diag}(1-b_i^2)\). Every idiosyncratic variance is positive, so the matrix is positive definite. The negative loading makes asset 3 negatively correlated with each of the other four assets.
+
+The existing geometric reduction prices \(G=\prod_i S_i^{w_i}\) as a scalar lognormal underlying. With weights summing to one,
+
+\[
+\sigma_G^2=(w\odot\sigma)^\top\rho(w\odot\sigma),\qquad
+q_{\mathrm{eff}}=\sum_i w_iq_i+\tfrac12\sum_iw_i\sigma_i^2-\tfrac12\sigma_G^2.
+\]
+
+The initial geometric spot is 101.03933496, effective volatility 0.14116669 and effective dividend yield 0.03967848. The analytical call price is 5.49471932. Each coordinate delta uses the chain rule \(\Delta_i=\Delta_G w_iG/S_i\). The vector reference applies the same reduction to batches of states. The integration check compares the batched deltas with central price bumps in all five coordinates.
+
+### Vector solver contracts
+
+The value-gradient network takes time and five physical spots and returns a scalar. The existing input gradient yields five physical deltas. For row batches the Brownian control is \((\Delta\odot\sigma\odot S)L\), where \(LL^\top=\rho\). Exact GBM shocks use Brownian row increments multiplied by \(L^\top\).
+
+The terminal model has one initial price and five initial controls. Each later network takes five spots and returns five discounted Brownian exposures. With controls and increments of shape \((N,M,5)\), the last-axis inner product gives one discounted value increment per path and step. Recovery first multiplies the discounted control by \(e^{rt}\), then solves \(\Sigma(S)^\top\Delta=Z\). In this case \(\Sigma(S)=\operatorname{diag}(\sigma_i S_i)L\). The test uses the transposed physical diffusion to reconstruct the discounted-model output at a positive time after accounting for discounting.
+
+Both fits use CPU float64, seed 2026, width 16, 128 fresh paths per update, 16 intervals and 3,000 updates. The value-gradient terminal weight is one. Each selected checkpoint follows its existing validation rule. The separate risk run uses 2,048 matched paths with seed 2031 and SeedSequence branch 4. Reports retain price, all five coordinate risks, the same initial inspection bands of 0.25 for price and 0.02 for each delta, and the source fit metadata. Geometric archives use shape \((N,M,5)\) for pre-expiry risks and controls, and \((N,M+1,5)\) for states. Diffusion diagnostics use \((N,M)\).
+
+### Observed prices, coordinate errors and tails
+
+Both fits complete all 3,000 updates. The selected value-gradient checkpoint is at update 3,000 with 401 parameters and a recorded fit time of 15.40 seconds. Terminal loss selects update 2,700 with 6,801 parameters and a fit time of 24.56 seconds. The recorded runtime is Linux, Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu.
+
+| Model | Initial price | Signed price error | Matched-state delta RMSE | Maximum absolute delta error |
+| --- | ---: | ---: | ---: | ---: |
+| Value-gradient | 5.76936224 | +0.27464292 | 0.02791369 | 0.21941861 |
+| Terminal loss | 5.52561574 | +0.03089642 | 0.02524980 | 0.45207228 |
+
+| Asset | Analytical delta | Value-gradient initial error | Terminal initial error | Value-gradient path RMSE | Terminal path RMSE |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.05718615 | +0.00103829 | +0.00862142 | 0.01996655 | 0.01888358 |
+| 2 | 0.07720131 | -0.00942098 | +0.00482740 | 0.02131964 | 0.01943079 |
+| 3 | 0.09357734 | -0.02174397 | +0.00222855 | 0.02662496 | 0.02092674 |
+| 4 | 0.13544089 | -0.00559817 | +0.00192072 | 0.03141863 | 0.02973996 |
+| 5 | 0.14705011 | +0.00183190 | -0.00173087 | 0.03669690 | 0.03363367 |
+
+The terminal model meets both initial inspection targets. The value-gradient model exceeds the price band by 0.02464292 and the asset 3 delta band by 0.00174397. At all five coordinates the terminal model has lower path RMSE and more violations of \(0\leq\Delta_i\leq e^{-q_{\mathrm{eff}}(T-t)}w_iG/S_i\). The respective totals are 14,107 for terminal loss and 7,484 for value-gradient across 163,840 correlated path/time/asset evaluations. The terminal model reaches a delta of -0.45207228. Its pooled delta RMSE exceeds the value-gradient RMSE from time 0.6875 onward on this grid. At the last pre-expiry step the two RMSEs are 0.05019 and 0.03634, respectively. The findings cover one fixed case and one training seed per solver.
+
+The diffusion condition number is 2.93292 initially and ranges from 1.85138 to 6.63706 on the matched states. The minimum sampled singular value is 7.06947 and the maximum inverse norm is 0.14145331. Control reconstruction residuals are below 5.8e-15. The arithmetic recovery accuracy separates the observed model errors from rounding in the linear solve.
+
+### Reproduction and regression
+
+```bash
+python -m bsde_pricing reference --case geometric-five
+python -m bsde_pricing train --case geometric-five
+python -m bsde_pricing train-terminal --case geometric-five
+python -m bsde_pricing compare-risk \
+  --value-run scratch/runs/geometric_five_fbsnn \
+  --terminal-run scratch/runs/geometric_five_terminal_bsde \
+  --run-dir scratch/runs/geometric_five_risk
+python -m unittest discover -s tests -v
+```
+
+All 85 tests pass in the development workspace. The five-asset integration test fits and reloads both models, reloads the common archive, checks all coordinate references with central price bumps, and checks the vector reconstruction with an independently assembled diffusion. Re-running the vanilla comparison from the original checkpoints reproduces all archive arrays and the non-timing report exactly. The notebook adds three code cells and two figures covering coordinate accuracy, errors over time and bounds. MacBook verification is pending.

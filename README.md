@@ -60,6 +60,19 @@ The comparison loads the selected seed-2026, weight-one value-gradient checkpoin
 
 The terminal model meets both initial inspection targets in this one-seed comparison. Tail risk remains inaccurate: it violates call delta bounds at 3,136 of 32,768 sampled path/time points, versus 1,541 for the value-gradient model. The value-gradient initial gamma is 0.00578372 against 0.01933341 analytically; finite delta bumps agree with its automatic derivative. Reconstruction residuals are at floating-point scale and do not certify the learned controls. The [common risk evaluation](docs/methodology.md#common-price-and-risk-evaluation) records selection provenance, diffusion conditioning, numerical checks and timing scope. The notebook retains raw state slices and tail errors. These are frozen single-seed models with different parameter counts, not a robust solver or speed ranking.
 
+## Five-asset geometric basket
+
+```bash
+python -m bsde_pricing train --case geometric-five
+python -m bsde_pricing train-terminal --case geometric-five
+python -m bsde_pricing compare-risk \
+  --value-run scratch/runs/geometric_five_fbsnn \
+  --terminal-run scratch/runs/geometric_five_terminal_bsde \
+  --run-dir scratch/runs/geometric_five_risk
+```
+
+The basket uses unequal spots, weights, volatilities and dividend yields with mixed-sign correlations. Both fits complete 3,000 updates at seed 2026. The terminal model meets the price and all five initial delta inspection bands. The value-gradient model misses the price band and the third delta band. On 2,048 common paths, terminal delta RMSE is 0.025250 versus 0.027914, while its worst delta error is 0.452072 versus 0.219419. The five coordinate results, bound counts and diffusion diagnostics are recorded in the [basket experiment](docs/methodology.md#five-asset-geometric-basket).
+
 ## Environment
 
 ```bash

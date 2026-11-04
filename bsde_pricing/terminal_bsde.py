@@ -1,4 +1,4 @@
-"""Fixed-start scalar Deep BSDE with learned discounted Brownian controls."""
+"""Fixed-start Deep BSDE with learned discounted Brownian controls."""
 
 import json
 import math
@@ -12,8 +12,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from .black_scholes import BlackScholesReference
 from .bsde import PricingBSDE
+from .geometric_basket import call_reference, reference_deltas_on_grid
 from .problems import EuropeanCall, GBMModel, PricingCase
 from .training import PathTrainingConfig, sample_training_paths
 
@@ -21,34 +21,37 @@ from .training import PathTrainingConfig, sample_training_paths
 class TerminalControlNetwork(nn.Module):
     """Learn Y0, discounted Z0 and one state-only network per later time.
 
-    Each control uses its current spot only. No terminal state or future
-    increment enters a control. All parameters and path data are CPU float64.
+    Each control uses the current spot vector. All parameters and path
+    data are CPU float64.
     The initial price is a free scalar, not a function of initial spot.
     """
 
     def __init__(self, case: PricingCase, config: PathTrainingConfig):
         super().__init__()
         self.n_steps = config.n_steps
-        for name, value in (("spot_scale", case.initial_spots[0]), ("value_scale", case.contract.strike),
+        self.dimension = case.model.dimension
+        spot_scale = case.initial_spots[0] if self.dimension == 1 else case.initial_spots
+        for name, value in (("spot_scale", spot_scale), ("value_scale", case.contract.strike),
                             ("control_scale", case.contract.strike/math.sqrt(case.contract.maturity))):
             self.register_buffer(name, torch.tensor(value, dtype=torch.float64, device="cpu"))
         self.initial_value = nn.Parameter(torch.zeros((), dtype=torch.float64, device="cpu"))
-        self.initial_control = nn.Parameter(torch.zeros((), dtype=torch.float64, device="cpu"))
+        control_shape = () if self.dimension == 1 else (self.dimension,)
+        self.initial_control = nn.Parameter(torch.zeros(control_shape, dtype=torch.float64, device="cpu"))
         with torch.random.fork_rng(devices=[]):
             torch.default_generator.manual_seed(config.seed)
             self.layers = nn.ModuleList([
-                nn.Sequential(nn.Linear(1, config.width, dtype=torch.float64, device="cpu"), nn.Tanh(),
+                nn.Sequential(nn.Linear(self.dimension, config.width, dtype=torch.float64, device="cpu"), nn.Tanh(),
                               nn.Linear(config.width, config.width, dtype=torch.float64, device="cpu"), nn.Tanh(),
-                              nn.Linear(config.width, 1, dtype=torch.float64, device="cpu"))
+                              nn.Linear(config.width, self.dimension, dtype=torch.float64, device="cpu"))
                 for _ in range(config.n_steps-1)
             ])
 
     def discounted_controls(self, states: torch.Tensor) -> torch.Tensor:
         if (states.dtype != torch.float64 or states.device.type != "cpu" or states.ndim != 3
-                or states.shape[0] < 1 or states.shape[1:] != (self.n_steps+1, 1)
+                or states.shape[0] < 1 or states.shape[1:] != (self.n_steps+1, self.dimension)
                 or states.requires_grad or not bool(torch.isfinite(states).all()) or bool((states <= 0).any())):
-            raise ValueError("States must be fixed positive CPU float64 data with shape (N,M+1,1).")
-        controls = [self.initial_control.expand(states.shape[0], 1)]
+            raise ValueError("States must be fixed positive CPU float64 data with shape (N,M+1,d).")
+        controls = [self.initial_control.expand(states.shape[0], self.dimension)]
         controls.extend(layer(states[:, step]/self.spot_scale-1)
                         for step, layer in enumerate(self.layers, start=1))
         return torch.stack(controls, dim=1)*self.control_scale
@@ -58,7 +61,7 @@ class TerminalControlNetwork(nn.Module):
         if (increments.shape != controls.shape or increments.dtype != torch.float64
                 or increments.device.type != "cpu" or increments.requires_grad
                 or not bool(torch.isfinite(increments).all())):
-            raise ValueError("Increments must be fixed finite CPU float64 data with shape (N,M,1).")
+            raise ValueError("Increments must be fixed finite CPU float64 data with shape (N,M,d).")
         initial = (self.value_scale*self.initial_value).expand(states.shape[0], 1)
         values = torch.cat((initial, initial+torch.cumsum((controls*increments).sum(dim=2), dim=1)), dim=1)
         if not bool(torch.isfinite(values).all()):
@@ -79,13 +82,13 @@ class TerminalEvaluation:
 
 
 class TerminalBSDESolver:
-    """Terminal-payoff fitting for one scalar GBM call, without price labels."""
+    """Terminal-payoff fitting for vanilla and geometric GBM calls."""
 
     def __init__(self, case: PricingCase, config: PathTrainingConfig = PathTrainingConfig()):
         if type(config) is not PathTrainingConfig:
             raise ValueError("Terminal-BSDE training uses PathTrainingConfig without local-loss weighting or patience.")
-        self.reference = BlackScholesReference(case.model, case.contract)
-        if case.contract.maturity <= 0 or case.model.volatilities[0] <= 0:
+        self.reference = call_reference(case)
+        if case.contract.maturity <= 0 or min(case.model.volatilities) <= 0:
             raise ValueError("Terminal-BSDE training requires positive maturity and volatility.")
         self.case, self.config = case, config
         self.network = TerminalControlNetwork(case, config)
@@ -105,11 +108,13 @@ class TerminalBSDESolver:
         values, _ = self.network(states, increments)
         return ((values[:, -1]-self._payoffs(states))/self.case.contract.strike).square().mean()
 
-    def initial_value(self) -> dict[str, float]:
+    def initial_value(self) -> dict[str, float | list[float]]:
         price = float((self.network.value_scale*self.network.initial_value).detach())
-        target = self.reference.evaluate(self.case.initial_spots[0]).call_price
+        spots = self.case.initial_spots[0] if self.case.model.dimension == 1 else self.case.initial_spots
+        target = self.reference.evaluate(spots).call_price
+        control = (self.network.control_scale*self.network.initial_control).detach()
         return {"price": price, "reference_price": target, "price_error": price-target,
-                "discounted_initial_control": float((self.network.control_scale*self.network.initial_control).detach())}
+                "discounted_initial_control": control.tolist()}
 
     def _evaluate(self, rng: np.random.Generator, n_paths: int) -> TerminalEvaluation:
         states, increments = self._batch(rng, n_paths)
@@ -119,17 +124,17 @@ class TerminalBSDESolver:
         residuals = (values[:, -1]-payoffs).numpy()
         problem = PricingBSDE(self.case.model, self.case.contract)
         # This matched-path oracle is descriptive and never enters training or selection.
-        analytical_controls = np.stack([
-            problem.control(states[:, m].numpy(), self.reference.call_delta_array(states[:, m].numpy(), t))
-            for m, t in enumerate(self.times[:-1])
-        ], axis=1)*self.discount[None, :-1, None]
-        reference_price = self.reference.evaluate(self.case.initial_spots[0]).call_price
+        spots = states.numpy()
+        analytical_deltas = reference_deltas_on_grid(self.reference, spots, self.times)
+        analytical_controls = problem.control(spots[:, :-1], analytical_deltas)*self.discount[None, :-1, None]
+        initial = self.initial_value()
+        reference_price = initial["reference_price"]
         analytical_terminal = reference_price+(analytical_controls*increments.numpy()).sum(axis=(1, 2))
         analytical_residuals = analytical_terminal-payoffs.numpy()
-        stochastic_integral = values[:, -1].numpy()-self.initial_value()["price"]
+        stochastic_integral = values[:, -1].numpy()-initial["price"]
         rmse = float(np.sqrt(np.mean(residuals**2)))
         summary = {
-            "n_paths": n_paths, "initial": self.initial_value(),
+            "n_paths": n_paths, "initial": initial,
             "discounted_terminal_rmse": rmse,
             "undiscounted_terminal_rmse": rmse/float(self.discount[-1]),
             "normalized_terminal_loss": float(np.mean((residuals/self.case.contract.strike)**2)),
@@ -140,7 +145,10 @@ class TerminalBSDESolver:
             "stochastic_integral_mean_se": float(np.std(stochastic_integral, ddof=1)/math.sqrt(n_paths)),
             "analytical_discounted_terminal_rmse": float(np.sqrt(np.mean(analytical_residuals**2))),
         }
-        arrays = [self.times.copy(), states[:, :, 0].numpy().copy(), values.numpy(), controls[:, :, 0].numpy(),
+        controls = controls.numpy()
+        if self.case.model.dimension == 1:
+            spots, controls = spots[:, :, 0], controls[:, :, 0]
+        arrays = [self.times.copy(), spots.copy(), values.numpy(), controls,
                   payoffs.numpy(), residuals, analytical_residuals]
         for array in arrays:
             array.setflags(write=False)

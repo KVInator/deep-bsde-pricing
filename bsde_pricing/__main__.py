@@ -158,11 +158,11 @@ def main() -> None:
     describe = commands.add_parser(
         "describe", help="show a pricing case and its financial conventions"
     )
-    describe.add_argument("--case", choices=("vanilla", "correlated", "geometric"), default="vanilla")
+    describe.add_argument("--case", choices=("vanilla", "correlated", "geometric", "geometric-five"), default="vanilla")
     reference = commands.add_parser(
         "reference", help="evaluate the analytical price and spot Greeks"
     )
-    reference.add_argument("--case", choices=("vanilla", "geometric"), default="vanilla")
+    reference.add_argument("--case", choices=("vanilla", "geometric", "geometric-five"), default="vanilla")
     monte_carlo = commands.add_parser(
         "monte-carlo", help="estimate a price and its uncertainty from IID terminal states"
     )
@@ -213,9 +213,9 @@ def main() -> None:
     bsde_loss.add_argument("--paths", type=int, default=2048)
     bsde_loss.add_argument("--seed", type=int, default=2026)
     bsde_loss.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64))
-    train = commands.add_parser("train", help="run the bounded one-asset value-gradient experiment")
-    train.add_argument("--case", choices=("vanilla",), default="vanilla")
-    train.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_fbsnn"))
+    train = commands.add_parser("train", help="fit the value-gradient solver")
+    train.add_argument("--case", choices=("vanilla", "geometric-five"))
+    train.add_argument("--run-dir", type=Path)
     train.add_argument("--iterations", type=int)
     train.add_argument("--seed", type=int)
     train.add_argument("--terminal-weight", type=float)
@@ -224,12 +224,12 @@ def main() -> None:
     train.add_argument("--resume", type=Path, help="continue a resume.pt checkpoint with its saved configuration")
     study = commands.add_parser("training-study", help="compare three fixed seeds and terminal weights 1 and 5")
     study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/reproducibility"))
-    terminal_train = commands.add_parser("train-terminal", help="fit the scalar terminal-loss Deep BSDE solver")
-    terminal_train.add_argument("--case", choices=("vanilla",), default="vanilla")
-    terminal_train.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_terminal_bsde"))
+    terminal_train = commands.add_parser("train-terminal", help="fit the terminal-loss Deep BSDE solver")
+    terminal_train.add_argument("--case", choices=("vanilla", "geometric-five"), default="vanilla")
+    terminal_train.add_argument("--run-dir", type=Path)
     terminal_train.add_argument("--iterations", type=int, default=3000)
     terminal_train.add_argument("--seed", type=int, default=2026)
-    risk = commands.add_parser("compare-risk", help="compare saved scalar models and recover control-based deltas")
+    risk = commands.add_parser("compare-risk", help="compare saved models and recover control-based deltas")
     risk.add_argument("--value-run", type=Path, default=Path("scratch/runs/reproducibility/seed_2026_weight_1"))
     risk.add_argument("--terminal-run", type=Path, default=Path("scratch/runs/vanilla_terminal_bsde"))
     risk.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_risk_comparison"))
@@ -243,6 +243,14 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command in ("train", "train-terminal"):
+            from .problems import geometric_five_case, vanilla_case
+
+            case_factory = geometric_five_case if args.case == "geometric-five" else vanilla_case
+            if args.run_dir is None:
+                suffix = "fbsnn" if args.command == "train" else "terminal_bsde"
+                prefix = "geometric_five" if args.case == "geometric-five" else "vanilla"
+                args.run_dir = Path("scratch/runs")/f"{prefix}_{suffix}"
         if args.command == "compare-risk":
             from .risk_comparison import compare_saved_runs
 
@@ -254,11 +262,10 @@ def main() -> None:
                              indent=2, sort_keys=True, allow_nan=False))
             return
         if args.command == "train-terminal":
-            from .problems import vanilla_case
             from .terminal_bsde import train_terminal_and_save
             from .training import PathTrainingConfig
 
-            result = train_terminal_and_save(vanilla_case(), PathTrainingConfig(
+            result = train_terminal_and_save(case_factory(), PathTrainingConfig(
                 iterations=args.iterations, seed=args.seed,
             ), args.run_dir)
             print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
@@ -280,7 +287,6 @@ def main() -> None:
                 parser.exit(1, "Study incomplete; failed or time-limited runs remain in the report.\n")
             return
         if args.command == "train":
-            from .problems import vanilla_case
             from .training import FBSNNSolver, TrainingConfig, train_and_save
 
             if args.resume is not None:
@@ -289,6 +295,8 @@ def main() -> None:
                 if args.run_dir.exists():
                     raise FileExistsError(f"Run directory already exists: {args.run_dir}")
                 solver = FBSNNSolver.resume(args.resume)
+                if args.case is not None and args.case != solver.case.name:
+                    raise ValueError("Case flag disagrees with the resume checkpoint.")
                 result = solver.fit(stop_after=args.stop_after)
                 solver.save(args.run_dir, result)
             else:
@@ -296,7 +304,7 @@ def main() -> None:
                     ("iterations", args.iterations), ("seed", args.seed),
                     ("terminal_weight", args.terminal_weight), ("patience", args.patience),
                 ) if value is not None}
-                result = train_and_save(vanilla_case(), TrainingConfig(**config),
+                result = train_and_save(case_factory(), TrainingConfig(**config),
                                         args.run_dir, stop_after=args.stop_after)
             print(json.dumps({
                 "run_directory": str(args.run_dir), "status": result["status"],
@@ -315,10 +323,10 @@ def main() -> None:
             )
             report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
         else:
-            from .problems import correlated_case, geometric_case, vanilla_case
+            from .problems import correlated_case, geometric_case, geometric_five_case, vanilla_case
 
             case = {"vanilla": vanilla_case, "correlated": correlated_case,
-                    "geometric": geometric_case}[args.case]()
+                    "geometric": geometric_case, "geometric-five": geometric_five_case}[args.case]()
             if args.command == "describe":
                 report = case.to_json()
             else:

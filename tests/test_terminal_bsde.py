@@ -11,7 +11,7 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from bsde_pricing.problems import geometric_case, vanilla_case
+from bsde_pricing.problems import correlated_case, vanilla_case
 from bsde_pricing.terminal_bsde import TerminalBSDESolver, train_terminal_and_save
 from bsde_pricing.training import PathTrainingConfig, TrainingConfig
 
@@ -107,7 +107,7 @@ class TerminalBSDETests(unittest.TestCase):
             with self.assertRaises(ValueError): TerminalBSDESolver.load(Path(temp)/'bad.pt')
 
     def test_scope_limits_invalid_paths_time_cap_and_failure_record(self):
-        with self.assertRaises(ValueError): TerminalBSDESolver(geometric_case(), self.config)
+        with self.assertRaises(ValueError): TerminalBSDESolver(correlated_case(), self.config)
         with self.assertRaises(ValueError): TerminalBSDESolver(vanilla_case(), TrainingConfig())
         solver = TerminalBSDESolver(vanilla_case(), self.config)
         states, increments = solver._batch(np.random.default_rng(1), 8)

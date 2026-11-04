@@ -13,7 +13,7 @@ import torch
 
 from bsde_pricing.analytical_torch import AnalyticalCall
 from bsde_pricing.bsde import PricingBSDE
-from bsde_pricing.problems import GBMModel, EuropeanCall, vanilla_case
+from bsde_pricing.problems import GBMModel, EuropeanCall, geometric_five_case, vanilla_case
 from bsde_pricing.risk_comparison import RiskComparisonResult, SolverRiskComparison, compare_saved_runs
 from bsde_pricing.terminal_bsde import TerminalBSDESolver
 from bsde_pricing.training import FBSNNSolver, PathTrainingConfig, TrainingConfig
@@ -127,6 +127,38 @@ class SolverRiskComparisonTests(unittest.TestCase):
             data = json.loads((a/'report.json').read_text());data['evaluation']['initial']['price'] += 1
             (a/'report.json').write_text(json.dumps(data))
             with self.assertRaises(ValueError): compare_saved_runs(a,b,directory/'bad',n_paths=8)
+
+    def test_five_asset_saved_comparison_keeps_all_coordinates(self):
+        case = geometric_five_case()
+        value = FBSNNSolver(case, TrainingConfig(**self.config.__dict__))
+        terminal = TerminalBSDESolver(case, self.config)
+        with tempfile.TemporaryDirectory(dir='scratch/tests') as temp:
+            root = Path(temp)
+            value.save(root/'value', value.fit())
+            terminal.save(root/'terminal', terminal.fit())
+            compare_saved_runs(root/'value', root/'terminal', root/'risk', n_paths=8)
+            result = RiskComparisonResult.load(root/'risk')
+
+        self.assertEqual(result.spots.shape, (8, 5, 5))
+        self.assertEqual(result.terminal_deltas.shape, (8, 4, 5))
+        self.assertIsNone(result.report['value_gradient_gamma'])
+        index = 2
+        spot, time = result.spots[0, index], result.times[index]
+        reference = value.reference.evaluate(spot, time)
+        bumps = np.eye(5)*0.001
+        bumped = [(value.reference.evaluate(spot+h, time).call_price
+                   -value.reference.evaluate(spot-h, time).call_price)/0.002 for h in bumps]
+        np.testing.assert_allclose(result.reference_deltas[0, index], reference.call_deltas, atol=2e-14, rtol=0)
+        np.testing.assert_allclose(result.reference_deltas[0, index], bumped, atol=2e-9, rtol=0)
+        with torch.no_grad():
+            states = torch.from_numpy(result.spots.copy())
+            discounted = terminal.network.discounted_controls(states)[0, index].numpy()
+        diffusion = np.diag(spot*np.asarray(case.model.volatilities)) @ np.linalg.cholesky(case.model.correlation)
+        reconstructed = diffusion.T @ result.terminal_deltas[0, index]
+        np.testing.assert_allclose(reconstructed, math.exp(case.model.rate*time)*discounted, atol=1e-13, rtol=0)
+        for kind, deltas in (('value_gradient', result.value_deltas), ('terminal_loss', result.terminal_deltas)):
+            expected = np.sqrt(np.mean((deltas-result.reference_deltas)**2, axis=(0, 1)))
+            np.testing.assert_array_equal(result.report['models'][kind]['path_delta_rmse_by_coordinate'], expected)
 
 
 if __name__ == '__main__':
