@@ -1777,3 +1777,62 @@ The shared reference remains 6.13274065 with pointwise 95% half-width 0.00043547
 Total study wall time is 107.2763 seconds. Reference-worker peak is 142.98 MiB and controller peak is separately 210.11 MiB on the 8 GiB machine. Every measured worker remains below the 2,048 MiB limit. These observations support the next bounded development attempt, with no extrapolated accuracy or resource guarantee for larger dimensions.
 
 The supplied terminal summary matches the full report. The pushed notebook changes outputs only, with unchanged source, 30 sequential executed code cells and 22 complete figures without error or stderr outputs. The first 19 figures are byte-identical to the preceding verified notebook. The three new figures and eight tables retain all seeds, coordinate errors, reference precision, checkpoint selections and resource use. [Notebook ad0cde4](https://github.com/KVInator/deep-bsde-pricing/commit/ad0cde4c9c57b0c8b399c3113cc15c286f21ad8a)
+
+
+## Fifty-asset arithmetic development
+
+The 50-asset case retains the locked configuration, three development seeds and resource limits. Equal weights are 0.02, with spots and strike 100, maturity one year, rate 3%, volatility 20%, no dividends and correlation 0.30. Initial instantaneous relative variance is 0.01256, compared with 0.01312 at 25 assets. Correlation eigenvalues are 0.70 and 15.70, so initial diffusion condition number is sqrt(15.70/0.70). Diversification changes alongside nominal dimension.
+
+The existing development runner, terminal sampler, streaming references and two solvers perform the experiment. The CLI accepts the 50-asset case and chooses its own protected output directory. Width, batch, time grid, learning-rate schedule, checkpoint rules and accuracy targets retain their version-one settings. No architecture or training-budget adjustment is made. All final seed namespaces remain reserved.
+
+### Independent reference and every development seed
+
+Reference usability is `true` at Sobol power 16. Price is 6.03831370 with pointwise 95% half-width 0.00070720. The maximum scaled-delta half-width is 0.00042812. The reference report retains its independent IID check, pilots, replicate means and each attempted allocation. Intervals remain approximate and pointwise.
+
+| Seed | Model | Selected step | Execution | Price error | Price target | Maximum absolute scaled-delta error |
+| --- | --- | ---: | --- | ---: | --- | ---: |
+| 2026 | Terminal loss | 3000 | completed | -0.01627344 | outside_target | 0.57630551 |
+| 2026 | Value-gradient | 2900 | completed | -0.03687480 | outside_target | 0.16338050 |
+| 2027 | Terminal loss | 2900 | completed | -0.04104640 | outside_target | 0.49611509 |
+| 2027 | Value-gradient | 2900 | completed | +0.02644089 | outside_target | 0.19639441 |
+| 2028 | Terminal loss | 2800 | completed | -0.03544812 | outside_target | 0.43993238 |
+| 2028 | Value-gradient | 2900 | completed | +0.04692211 | outside_target | 0.23203505 |
+
+All six selected models miss the original 0.01 price target. Neither formulation meets all fifty weight-scaled delta targets at any seed. Terminal-loss initial delta bound violations are 4, 3 and 4 at the three seeds, while value-gradient has none. These violations are retained alongside the accuracy misses. The value-gradient model has 1,121 parameters and terminal loss 29,121. The common setup completes computationally, while independent financial checks expose its limitations at this dimension.
+
+Each coordinate error is divided by its 0.02 basket weight before comparison with the 0.01 target. The full report retains all fifty coordinate estimates and reference intervals, directional delta, initial bounds and diffusion diagnostics for every selected model. A small average signed price error can coexist with errors of opposite sign across seeds. It does not certify the individual runs. No conditional arithmetic path-risk RMSE or global terminal-model gamma is inferred from these initial references.
+
+### Measured workload components
+
+A separate guarded process creates fresh diagnostic models and Adam state. It runs two warmups and seven measured updates with the declared batch, width and grid, using development path seed 2034 and model-initialisation seed 2026. It separately times path sampling, objective forward evaluation, backward differentiation and the optimizer step. Value-gradient forward evaluation includes the spot differentiation used in its local loss. These nine diagnostic updates per formulation supply no accuracy estimates or checkpoint selection. Saved study fits remain separate processes.
+
+| Model | Path sampling ms | Objective forward ms | Backward ms | Adam step ms | Largest median component |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Terminal loss | 4.3651 | 2.5118 | 1.4459 | 1.4750 | sample_paths |
+| Value-gradient | 4.5667 | 3.9373 | 1.8177 | 0.2283 | sample_paths |
+
+The reported components identify the locally dominant workload before any implementation change. Component medians exclude imports and saved-fit evaluation and cannot be added to infer a stable end-to-end speed ratio. The diagnostic represents early updates of fresh models, rather than profiling all 3,000 updates. Actual fitting and worker costs remain independently recorded.
+
+| Seed | Model | Fit seconds | Paired evaluation seconds | Worker wall seconds | Peak resident MiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2026 | Terminal loss | 37.7659 | 0.1796 | 40.3885 | 399.49 |
+| 2026 | Value-gradient | 30.5237 | 0.3009 | 33.3082 | 479.72 |
+| 2027 | Terminal loss | 34.3366 | 0.1734 | 36.7698 | 394.88 |
+| 2027 | Value-gradient | 30.1804 | 0.3205 | 32.7185 | 479.65 |
+| 2028 | Terminal loss | 34.0559 | 0.1586 | 37.4914 | 401.55 |
+| 2028 | Value-gradient | 33.9496 | 0.3312 | 36.5975 | 481.32 |
+
+Total workspace study wall time is 231.3282 seconds. The largest training-worker peak is 481.32 MiB. Controller peak is separately 240.92 MiB. Runtime is Linux x86-64, Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu with CPU float64 and one thread. Per-worker time/RSS guards retain failed or capped tasks. These are workspace observations requiring MacBook verification, without a resource guarantee for 100 assets.
+
+The locked design fingerprint remains bb1fa7f593af65920e988f11a0fd64082e5aa40abd7ebcbcc22ea5fe2f532a30. Each result retains source digests, configurations, source checkpoint/report hashes, reference records and guard outcomes. The 25-asset evidence remains intact. The two dimensions share financial conventions and training settings but have different diversification and parameter counts. The notebook comparison shows all three seeds for each dimension rather than selecting a representative run.
+
+### Reproduction and verification
+
+```bash
+python -m bsde_pricing development-study --case arithmetic-50
+python -m unittest discover -s tests -v
+```
+
+Outputs are protected under `scratch/runs/arithmetic_50_development`. The diagnostic, reference and each seed have separate records. All 99 tests pass with user warnings treated as errors. The new timing check verifies workload coverage and thread restoration. Existing streaming, resource-limit, checkpoint and financial regressions pass. The neural notebook executes 33 code cells and renders 25 figures, with three appended code cells and three new figures. Earlier MacBook source/output cells are preserved exactly.
+
+The implementation and workspace experiment are verified. MacBook execution and pushed notebook review remain the completion checks for this dimensional step.

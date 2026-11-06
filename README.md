@@ -93,6 +93,14 @@ The study runs the declared arithmetic 25-asset case at development seeds 2026, 
 
 All six workspace fits complete 3,000 updates. Value-gradient meets the original price target at two seeds and misses it at the third. Terminal loss misses it at all three. Neither formulation meets all weight-scaled coordinate-delta targets at any seed. The [development results](docs/methodology.md#twenty-five-asset-arithmetic-development) retain every run, reference uncertainty, resource checks and costs. Notebook sections 26-28 show all 25 coordinate errors and the seed spread.
 
+## Fifty-asset development
+
+```bash
+python -m bsde_pricing development-study --case arithmetic-50
+```
+
+The 50-asset case uses the same runner, locked training settings, three development seeds and resource limits. Its protected directory is `scratch/runs/arithmetic_50_development`. A separate diagnostic measures path sampling, loss evaluation, backward differentiation and the Adam step using fresh models. It supplies no accuracy results or checkpoint choice. The [fifty-asset results](docs/methodology.md#fifty-asset-arithmetic-development) retain every run and measured component. Notebook sections 29-31 compare both dimensions, display all fifty coordinate errors and show the cost breakdown.
+
 ## Experiment design
 
 ```bash

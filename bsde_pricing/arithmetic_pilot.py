@@ -216,6 +216,11 @@ def _worker(kind: str, directory: Path) -> None:
     if kind == "reference":
         result = _reference_report(case, config)
         _write_json(directory/"reference.json", result)
+    elif kind == "diagnostic":
+        from .development_study import profile_update_components
+        from .training import PathTrainingConfig
+
+        _write_json(directory/"components.json", profile_update_components(case, PathTrainingConfig(**config["training"])))
     elif kind == "comparison":
         from .training import PathTrainingConfig
 
@@ -381,7 +386,7 @@ class ArithmeticPilot:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Internal isolated arithmetic-pilot worker")
-    parser.add_argument("--worker", required=True, choices=("reference", "value_gradient", "terminal_loss", "comparison"))
+    parser.add_argument("--worker", required=True, choices=("reference", "value_gradient", "terminal_loss", "comparison", "diagnostic"))
     parser.add_argument("--run-dir", required=True, type=Path)
     arguments = parser.parse_args()
     _worker(arguments.worker, arguments.run_dir)

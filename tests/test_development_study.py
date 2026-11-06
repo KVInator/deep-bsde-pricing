@@ -13,12 +13,23 @@ import numpy as np
 
 from bsde_pricing.arithmetic_pilot import _guarded_worker, _child_rss_mib, WorkerLimitError
 from bsde_pricing.basket_reference import BasketReferencePricer
-from bsde_pricing.development_study import ArithmeticDevelopmentStudy
+from bsde_pricing.development_study import ArithmeticDevelopmentStudy, profile_update_components
+from bsde_pricing.training import PathTrainingConfig
 from bsde_pricing.experiment_design import ExperimentDesign
 from bsde_pricing.problems import correlated_case
 
 
 class DevelopmentStudyTests(unittest.TestCase):
+    def test_component_profile_restores_threads_and_retains_all_workloads(self):
+        import torch
+        before = torch.get_num_threads()
+        config = PathTrainingConfig(iterations=2, n_steps=2, batch_size=8, width=4)
+        profile = profile_update_components(correlated_case(), config, repeats=3)
+        self.assertEqual(torch.get_num_threads(), before)
+        for model in profile["models"].values():
+            self.assertEqual(set(model["seconds"]), {"sample_paths", "objective_forward", "backward", "optimizer_step"})
+            self.assertTrue(all(len(v) == 3 and min(v) >= 0 for v in model["seconds"].values()))
+
     def setUp(self):
         Path("scratch/tests").mkdir(parents=True, exist_ok=True)
 

@@ -15,6 +15,52 @@ from .experiment_design import ExperimentDesign
 from .training import PathTrainingConfig
 
 
+def profile_update_components(case, config: PathTrainingConfig, *, repeats: int = 7) -> dict:
+    """Time fresh diagnostic models; these updates never supply accuracy results."""
+    import torch
+    from .training import FBSNNSolver, TrainingConfig
+    from .terminal_bsde import TerminalBSDESolver
+
+    if isinstance(repeats, bool) or not isinstance(repeats, int) or repeats < 2:
+        raise ValueError("repeats must be an integer at least two.")
+    old_threads = torch.get_num_threads()
+    result = {"seed": 2034, "warmups": 2, "repeats": repeats,
+              "scope": "fresh diagnostic models and Adam state; excludes imports and saved-fit accuracy",
+              "models": {}}
+    try:
+        torch.set_num_threads(1)
+        for kind in ("value_gradient", "terminal_loss"):
+            solver = (FBSNNSolver(case, TrainingConfig(**asdict(config))) if kind == "value_gradient"
+                      else TerminalBSDESolver(case, config))
+            optimizer = torch.optim.Adam(solver.network.parameters(), lr=config.learning_rate)
+            rng = np.random.default_rng(2034)
+            samples = {k: [] for k in ("sample_paths", "objective_forward", "backward", "optimizer_step")}
+            for iteration in range(2+repeats):
+                started = time.perf_counter()
+                states, increments = solver._batch(rng, config.batch_size)
+                sampled = time.perf_counter()
+                optimizer.zero_grad(set_to_none=True)
+                loss = (solver.loss(solver.network, solver.times, states, increments).total
+                        if kind == "value_gradient" else solver._loss(states, increments))
+                forwarded = time.perf_counter()
+                loss.backward()
+                backwarded = time.perf_counter()
+                optimizer.step()
+                updated = time.perf_counter()
+                if not bool(torch.isfinite(loss)):
+                    raise ArithmeticError("Nonfinite diagnostic loss.")
+                if iteration >= 2:
+                    for key, value in zip(samples, (sampled-started, forwarded-sampled,
+                                                   backwarded-forwarded, updated-backwarded)):
+                        samples[key].append(value)
+            medians = {k: float(np.median(v)) for k, v in samples.items()}
+            result["models"][kind] = {"seconds": samples, "median_seconds": medians,
+                                       "largest_median_component": max(medians, key=medians.get)}
+    finally:
+        torch.set_num_threads(old_threads)
+    return result
+
+
 class ArithmeticDevelopmentStudy:
     """Three paired development seeds with one shared independent reference.
 
@@ -87,6 +133,17 @@ class ArithmeticDevelopmentStudy:
             "correlation_min_eigenvalue": float(eigenvalues[0]), "correlation_max_eigenvalue": float(eigenvalues[-1]),
         }
         _write_json(directory/"design.json", design)
+        component_profile = None
+        if self.case.model.dimension >= 50:
+            diagnostic_dir = directory/"diagnostic"
+            diagnostic_dir.mkdir()
+            diagnostic_config = self._config(self.spec["development_seeds"][0],
+                self.spec["reference"]["sobol_powers"][0], self.spec["reference"]["check_pairs"][0])
+            _write_json(diagnostic_dir/"design.json", {"problem": design["problem"], "config": asdict(diagnostic_config)})
+            outcome = self._task(ArithmeticPilot(diagnostic_config), "diagnostic", diagnostic_dir, self.spec["resources"])
+            component_profile = {"task": outcome}
+            if outcome["status"] == "completed":
+                component_profile["timings"] = json.loads((diagnostic_dir/"components.json").read_text())
         levels, runs = [], []
         reference, usable = None, False
         base_seed = self.spec["development_seeds"][0]
@@ -139,6 +196,7 @@ class ArithmeticDevelopmentStudy:
                         model["maximum_absolute_scaled_delta_error"] = float(max(abs(c["signed_error"]) for c in model["scaled_delta_checks"]))
             runs.append(row)
             report = {**design, "reference_levels": levels, "reference": reference,
+                      "component_profile": component_profile,
                       "reference_usable": usable, "runs": runs, "wall_seconds": time.perf_counter()-started,
                       "status": "completed" if len(runs) == len(self.spec["development_seeds"]) and usable and all(
                           r.get("comparison_status") == "completed" and all(t["status"] == "completed" for t in r["tasks"].values())
