@@ -109,7 +109,10 @@ class SolverRiskComparison:
         """Keep the published scalar report and archive shapes."""
         return array[..., 0] if self.dimension == 1 else array
 
-    def _initial(self, kind: str) -> dict[str, object]:
+    def initial_risk(self, kind: str) -> dict[str, object]:
+        """Physical initial price, delta and control without a reference call."""
+        if kind not in ("value_gradient", "terminal_loss"):
+            raise ValueError("Unknown solver kind.")
         spots = np.array(self.case.initial_spots, dtype=np.float64)
         if kind == "value_gradient":
             point = torch.tensor([[0, *self.case.initial_spots]], dtype=torch.float64, device="cpu")
@@ -167,6 +170,8 @@ class SolverRiskComparison:
                 "scope": "initial physical spot; bump checks verify the network derivative only"}
 
     def run(self, *, n_paths: int = 2048, seed: int = 2031) -> RiskComparisonResult:
+        if self.reference is None:
+            raise ValueError("Path-risk errors require an analytical reference; use arithmetic-pilot for initial numerical checks.")
         if isinstance(n_paths, bool) or not isinstance(n_paths, int) or n_paths < 2:
             raise ValueError("n_paths must be an integer of at least two.")
         if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
@@ -194,11 +199,11 @@ class SolverRiskComparison:
         try:
             torch.set_num_threads(1)
             for kind, solver in (("value_gradient", self.value), ("terminal_loss", self.terminal)):
-                for _ in range(2): self._initial(kind)
+                for _ in range(2): self.initial_risk(kind)
                 durations = []
                 for _ in range(5):
                     started = time.perf_counter()
-                    initial = self._initial(kind)
+                    initial = self.initial_risk(kind)
                     durations.append(time.perf_counter()-started)
                 initial.update(reference_price=target.call_price, reference_delta=initial_reference_delta,
                                price_error=initial["price"]-target.call_price,
@@ -265,7 +270,7 @@ def compare_saved_runs(value_directory: Path, terminal_directory: Path, output: 
     provenance = {}
     for kind, directory in directories.items():
         source = json.loads((directory/"report.json").read_text())
-        initial = comparison._initial(kind)
+        initial = comparison.initial_risk(kind)
         keys = (("price", "price"), ("delta", "delta")) if kind == "value_gradient" else (
             ("price", "price"), ("brownian_control", "discounted_initial_control"))
         for result_key, source_key in keys:

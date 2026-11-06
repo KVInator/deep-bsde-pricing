@@ -92,7 +92,7 @@ class TrainingTests(unittest.TestCase):
         for kwargs in ({'iterations': True}, {'n_steps': 0}, {'evaluation_paths': 1},
                        {'learning_rate': float('nan')}, {'max_seconds': -1}, {'seed': -1}):
             with self.assertRaises(ValueError): TrainingConfig(**kwargs)
-        with self.assertRaises(ValueError): FBSNNSolver(correlated_case(), self.config)
+        self.assertIsNone(FBSNNSolver(correlated_case(), self.config).reference)
         with tempfile.TemporaryDirectory(dir='scratch/tests') as temp:
             directory = Path(temp)/'failed_run'
             with patch.object(FBSNNSolver, 'fit', side_effect=ArithmeticError('nonfinite loss')):

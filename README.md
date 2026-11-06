@@ -73,6 +73,16 @@ python -m bsde_pricing compare-risk \
 
 The basket uses unequal spots, weights, volatilities and dividend yields with mixed-sign correlations. Both fits complete 3,000 updates at seed 2026. The terminal model meets the price and all five initial delta inspection bands. The value-gradient model misses the price band and the third delta band. On 2,048 common paths, terminal delta RMSE is 0.025250 versus 0.027914, while its worst delta error is 0.452072 versus 0.219419. The five coordinate results, bound counts and diffusion diagnostics are recorded in the [basket experiment](docs/methodology.md#five-asset-geometric-basket).
 
+## Ten-asset arithmetic pilot
+
+```bash
+python -m bsde_pricing arithmetic-pilot
+```
+
+The pilot runs one equal-weight arithmetic case, an independent numerical reference and both neural fits. It uses 3,000 updates per solver, 16 intervals, width 16 and seed 2026. Reference prices and deltas use geometric controls with scrambled Sobol nets, checked against a separate antithetic Monte Carlo estimate. Reference precision, weight-scaled delta errors, runtime and peak resident memory are retained under `scratch/runs/arithmetic_ten_pilot`. Existing directories are protected.
+
+The workspace reference price is 6.40618406 with a pointwise 95% half-width of 0.00036192. Value-gradient and terminal-loss price errors are +0.13899423 and +0.01152083. Both miss the roadmap's 0.01 price target, and neither meets all weight-scaled delta targets. The reference intervals meet the allocated precision budget. These are one-seed development results. The [arithmetic pilot](docs/methodology.md#ten-asset-arithmetic-pilot) retains every coordinate, the independent-method discrepancies and measured costs. Sections 23-25 of the neural notebook read these saved results.
+
 ## Environment
 
 ```bash

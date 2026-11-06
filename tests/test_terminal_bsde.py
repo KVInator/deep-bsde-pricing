@@ -107,7 +107,7 @@ class TerminalBSDETests(unittest.TestCase):
             with self.assertRaises(ValueError): TerminalBSDESolver.load(Path(temp)/'bad.pt')
 
     def test_scope_limits_invalid_paths_time_cap_and_failure_record(self):
-        with self.assertRaises(ValueError): TerminalBSDESolver(correlated_case(), self.config)
+        self.assertIsNone(TerminalBSDESolver(correlated_case(), self.config).reference)
         with self.assertRaises(ValueError): TerminalBSDESolver(vanilla_case(), TrainingConfig())
         solver = TerminalBSDESolver(vanilla_case(), self.config)
         states, increments = solver._batch(np.random.default_rng(1), 8)

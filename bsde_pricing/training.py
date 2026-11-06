@@ -76,13 +76,13 @@ class PathEvaluation:
     spots: np.ndarray
     values: np.ndarray
     deltas: np.ndarray
-    reference_values: np.ndarray
-    reference_deltas: np.ndarray
+    reference_values: np.ndarray | None
+    reference_deltas: np.ndarray | None
     summary: dict[str, object]
 
 
 class FBSNNSolver:
-    """Fixed-start vanilla and geometric call training on CPU float64.
+    """Fixed-start European basket call training on CPU float64.
 
     Training, checkpoint selection and evaluation use disjoint random streams.
     Selection minimises the fixed validation objective at scheduled checks.
@@ -106,10 +106,14 @@ class FBSNNSolver:
     def _batch(self, rng: np.random.Generator, n_paths: int):
         return sample_training_paths(self.case, self.config.n_steps, rng, n_paths)
 
-    def initial_value(self) -> dict[str, float | list[float]]:
+    def initial_value(self) -> dict[str, float | list[float] | None]:
         point = torch.tensor([[0, *self.case.initial_spots]], dtype=torch.float64, device="cpu")
         result = value_derivatives(self.network, point, compute_hessian=False)
         price = float(result.values[0, 0])
+        if self.reference is None:
+            return {"price": price, "delta": result.gradient[0, 1:].tolist(),
+                    "reference_price": None, "reference_delta": None,
+                    "price_error": None, "delta_error": None}
         if self.case.model.dimension == 1:
             target = self.reference.evaluate(self.case.initial_spots[0])
             delta = float(result.gradient[0, 1])
@@ -128,13 +132,29 @@ class FBSNNSolver:
         dimension = self.case.model.dimension
         inputs = torch.cat((self.times[:-1].expand(n_paths, -1)[..., None], states[:, :-1]), dim=2)
         prediction = value_derivatives(self.network, inputs.reshape(-1, dimension+1), compute_hessian=False)
-        analytical = AnalyticalCall(self.case.model, self.case.contract)
         terminal_inputs = torch.cat((self.times[-1].expand(n_paths, 1), states[:, -1]), dim=1)
         with torch.no_grad():
             terminal = self.network(terminal_inputs)
         values = np.column_stack((prediction.values.numpy().reshape(n_paths, n_steps), terminal.numpy()))
         deltas = prediction.gradient[:, 1:].numpy().reshape(n_paths, n_steps, dimension)
         spots = states.numpy()
+        if self.reference is None:
+            loss = self.loss(self.network, self.times, states, increments, parameter_graph=False)
+            terminal_error = values[:, -1]-self.case.contract.payoff(spots[:, -1])
+            summary = {
+                "n_paths": n_paths, "initial": self.initial_value(),
+                "terminal_payoff_rmse": float(np.sqrt(np.mean(terminal_error**2))),
+                "local_loss": float(loss.local), "terminal_loss": float(loss.terminal),
+                "total_loss": float(loss.total), "unweighted_total_loss": float(loss.local+loss.terminal),
+                "price_rmse_before_expiry": None, "delta_rmse_before_expiry": None,
+                "analytical_local_loss": None,
+                "reference_scope": "independent initial numerical reference evaluated after fitting",
+            }
+            arrays = [self.times.numpy().copy(), spots.copy(), values, deltas]
+            for array in arrays:
+                array.setflags(write=False)
+            return PathEvaluation(*arrays, None, None, summary)
+        analytical = AnalyticalCall(self.case.model, self.case.contract)
         if dimension == 1:
             spots, deltas = spots[:, :, 0], deltas[:, :, 0]
             reference_values = np.empty_like(values)
@@ -249,9 +269,12 @@ class FBSNNSolver:
             with torch.random.fork_rng(devices=[]):
                 torch.set_rng_state(state["torch_rng_state"])
                 if not state["history"]:
-                    analytical = self.loss(AnalyticalCall(self.case.model, self.case.contract),
-                                           self.times, *state["validation"], parameter_graph=False)
-                    state["analytical_validation_local"] = float(analytical.local)
+                    if self.reference is None:
+                        state["analytical_validation_local"] = None
+                    else:
+                        analytical = self.loss(AnalyticalCall(self.case.model, self.case.contract),
+                                               self.times, *state["validation"], parameter_graph=False)
+                        state["analytical_validation_local"] = float(analytical.local)
                     self._record(state["training_seconds"]+time.perf_counter()-started)
                 status = "paused"
                 for step in range(state["completed"]+1, target+1):
@@ -317,7 +340,7 @@ class FBSNNSolver:
             "training_seconds": state["training_seconds"], "evaluation_seconds": evaluation_seconds,
             "evaluation": evaluation, "last_evaluation": last_evaluation,
             "inspection_targets": {"price_absolute_error": 0.25, "delta_absolute_error": 0.02},
-            "targets_met": None if initial is None else {
+            "targets_met": None if initial is None or self.reference is None else {
                 "price": abs(initial["price_error"]) <= 0.25,
                 "delta": bool(np.max(np.abs(initial["delta_error"])) <= 0.02)},
         }

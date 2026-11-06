@@ -1445,3 +1445,132 @@ The MacBook run completes both 3,000-update fits. Value-gradient takes 9.0582 se
 Terminal loss meets the price band and all five initial delta bands. It also has 14,107 bound violations versus 7,484 for value-gradient, and a larger worst delta error. The two risk figures retain the crossover in per-time RMSE at 0.6875 years and the larger terminal-model RMSE near expiry. The maximum absolute reconstruction residual remains below 5.7e-15 on the MacBook.
 
 The notebook has 24 sequential code cells and 16 figures with no error or stderr outputs. The two new figures and seven tables agree with the report, and the first 14 figures match the earlier reviewed outputs byte for byte. The notebook commit contains the executed results. [b294e4c](https://github.com/KVInator/deep-bsde-pricing/commit/b294e4c096fb0582f221e621a52509388199990f)
+
+
+## Ten-asset arithmetic pilot
+
+### Question and declared case
+
+The pilot measures whether an independently resolved ten-asset arithmetic reference and two bounded neural fits are feasible before fixing the wider experiment schedule. It retains one development seed and the existing architectures. Accuracy misses, resource costs and numerical-reference uncertainty remain separate outcomes.
+
+The call pays
+
+\[
+g(S_T)=(A_T-K)^+,\qquad A_T=\sum_{i=1}^{10}w_iS_T^i.
+\]
+
+All spots and the strike are 100, maturity is one year, the continuous rate is 3%, every volatility is 20%, dividends are zero and every weight is 0.10. Off-diagonal correlation is 0.30. The correlation eigenvalues are 0.70 with multiplicity nine and 3.70 once, so the diffusion has full rank. These are synthetic risk-neutral inputs under the existing constant-coefficient GBM model. The preceding unequal five-asset case separately checks coordinate orientation.
+
+The forward process uses exact lognormal transitions. Neural controls still use a 16-interval grid, whose stochastic-integral approximation has a separate time-discretisation error. This pilot does not isolate that error from optimisation and network approximation.
+
+### Independent price and delta contributions
+
+Direct terminal simulation supplies the discounted price contribution and pathwise coordinate derivatives
+
+\[
+X_0=e^{-rT}(A_T-K)^+,\qquad
+X_i=e^{-rT}\mathbf 1_{\{A_T>K\}}w_i\frac{S_T^i}{S_0^i}.
+\]
+
+The derivative follows from \(\partial S_T^i/\partial S_0^i=S_T^i/S_0^i\). Under this nondegenerate model the arithmetic basket has no atom at the strike, so the payoff kink has probability zero. The pathwise derivative estimates delta. Differentiating its indicator again would require a separate treatment of the strike boundary for gamma.
+
+For the geometric basket \(G_T=\prod_i(S_T^i)^{w_i}\), the corresponding price and pathwise-delta contributions are \(Y_j\), with analytical expectations \(\mu_j\) from `GeometricBasketReference`. Each target has its own fitted coefficient
+
+\[
+\widehat\beta_j=
+\frac{\widehat{\operatorname{Cov}}(X_j,Y_j)}{\widehat{\operatorname{Var}}(Y_j)},
+\qquad H_j=X_j-\widehat\beta_j(Y_j-\mu_j).
+\]
+
+The coefficients use 4,096 independent antithetic pilot pairs. The coefficient pilot is disjoint from its method's evaluation sample. Conditional on a frozen coefficient, the control adjustment has zero mean. The same terminal-sampling and contribution kernels from the earlier basket references perform this calculation.
+
+The primary reference uses 16 independent scrambled Sobol nets with \(2^{16}\) terminal states each, seed 2032 and reference branch one. A coarse level uses \(2^{12}\) states with the same scramble seeds and coefficient pilot. These two levels are dependent. The reference standard error is the sample standard deviation of the 16 controlled net means divided by four. The pointwise interval uses a Student-t critical value with 15 degrees of freedom. It is an approximate interval across randomised nets, without an IID-point assumption.
+
+A separate check uses 131,072 IID antithetic pair averages at seed 2033, branch zero, with its own independent coefficient pilot. Its standard error counts pairs as sampling units. The training seed is 2026 with separate children zero, one and two for training, checkpoint validation and post-fit paths. Reference values never enter either training worker or select checkpoints.
+
+### Reference precision and method agreement
+
+The original roadmap targets are 0.01 currency units in price and 0.01 in every weight-scaled delta \(\Delta_i/w_i\). The reference allocation is 20% of each target. Thus the allowed 95% half-widths are 0.002 in price and 0.002 in scaled delta, equivalent to 0.0002 in each raw delta here. These targets are distinct from the earlier 0.25 price and 0.02 raw-delta inspection bands. Both sets retain their original meanings.
+
+| Reference | Evaluation terminal states | Controlled price | Pointwise 95% half-width |
+| --- | ---: | ---: | ---: |
+| Sobol 2^12 | 65,536 | 6.40714337 | 0.00184860 |
+| Sobol 2^16 | 1,048,576 | 6.40618406 | 0.00036192 |
+| Antithetic IID | 262,144 | 6.40772167 | 0.00226616 |
+
+The primary price is 6.40618406, with interval [6.40582214, 6.40654598]. The largest scaled-delta half-width is 0.00033689. Both precision allocations are met. The controlled price lies between the geometric-call lower bound 5.64841010 and the weighted single-asset-call upper bound 9.41340338.
+
+The Sobol-minus-IID price difference is -0.00153761, or -1.31574 combined standard errors. Coordinate differences range from -1.84007 to -3.24880 combined standard errors, and some pointwise 95% intervals disagree. The coordinate contributions share terminal states and are correlated. The report retains all differences and a four-combined-standard-error diagnostic screen. That screen supplies no simultaneous confidence guarantee. The stated precision budget uses the primary interval's estimated uncertainty and does not prove its coverage from this one experiment.
+
+For a fixed learned price or delta and reference interval [a,b], its signed error interval is [learned-b, learned-a]. Delta errors and intervals are divided by the coordinate weight. An entire interval inside the target band is classified within target, an entire interval outside is outside target, and a crossing interval is unresolved at reference precision.
+
+### Neural fits and initial errors
+
+Both solvers use 3,000 Adam updates, 128 fresh paths per update, width 16, 16 time intervals and a 180-second per-fit soft time cap. Validation has 256 fixed paths, post-fit evaluation has 2,048 paths, learning rate is 0.001 and the existing rate reduction applies after 70% of updates. Value-gradient uses terminal weight one. Validation selection rules retain the minimum scheduled total loss for value-gradient and minimum scheduled terminal loss for terminal fitting. Numerical-reference accuracy never selects the checkpoint.
+
+| Selected model | Parameters | Selected / completed update | Price | Signed error | 0.01 target |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Value-gradient | 481 | 3,000 / 3,000 | 6.54517829 | +0.13899423 | Missed |
+| Terminal loss | 9,281 | 2,900 / 3,000 | 6.41770489 | +0.01152083 | Missed |
+
+Both price-error intervals lie outside the 0.01 target. The terminal model is close to its boundary, with signed error interval [0.01115890, 0.01188275]. All ten value-gradient scaled-delta intervals lie outside their 0.01 bands. Terminal loss has nine outside and one unresolved, at coordinate two. No coordinate set meets all targets.
+
+| Asset | Numerical delta | Value-gradient delta | Value-gradient scaled error | Terminal delta | Terminal scaled error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.06205644 | 0.06332829 | +0.01271847 | 0.05536382 | -0.06692621 |
+| 2 | 0.06205976 | 0.07515089 | +0.13091129 | 0.06307560 | +0.01015848 |
+| 3 | 0.06205965 | 0.05442991 | -0.07629742 | 0.06578262 | +0.03722972 |
+| 4 | 0.06205727 | 0.06730738 | +0.05250114 | 0.06402795 | +0.01970688 |
+| 5 | 0.06205440 | 0.06487484 | +0.02820446 | 0.05918592 | -0.02868474 |
+| 6 | 0.06205936 | 0.05586342 | -0.06195940 | 0.06438542 | +0.02326057 |
+| 7 | 0.06205971 | 0.05385863 | -0.08201079 | 0.05661401 | -0.05445697 |
+| 8 | 0.06205793 | 0.05453418 | -0.07523751 | 0.06686803 | +0.04810103 |
+| 9 | 0.06205698 | 0.06431697 | +0.02259994 | 0.05292142 | -0.09135559 |
+| 10 | 0.06205671 | 0.05620806 | -0.05848653 | 0.06334506 | +0.01288345 |
+
+The true coordinate deltas are equal by permutation symmetry of the financial case. The separate numerical coordinate estimates and learned predictions remain visible, without symmetry averaging. The largest absolute scaled-delta errors are 0.13091129 for value-gradient and 0.09135559 for terminal loss. Every learned initial delta lies inside the arithmetic-call bounds \(0\le\Delta_i\le w_i e^{-q_iT}=0.10\). Bound satisfaction supplies a weaker check than accuracy.
+
+Initial diffusion condition number is 2.29907, smallest singular value is 16.73320 and inverse norm is 0.05976143. Maximum control reconstruction residual is below 1.1e-15. These algebraic checks establish correct recovery for the supplied controls, while the independent reference reveals their remaining financial errors.
+
+Value-gradient terminal-payoff RMSE is 0.73003405 on its post-fit paths. Terminal-loss discounted terminal RMSE is 1.76839287. They measure different predictions and discounting conventions. The solver reports record missing conditional arithmetic reference values, path deltas and analytical-control comparisons as null. No arithmetic path-risk RMSE or global terminal-model gamma is inferred from the initial reference.
+
+### Resource measurement and scheduling
+
+`ArithmeticPilot` owns the declared design, sequential worker execution and final comparison. The reference and each solver run in fresh Python subprocesses with one-thread BLAS/OpenMP settings. PyTorch uses one CPU thread and float64. Solver fitting time covers the optimisation loop, paired evaluation covers selected and final checkpoints, and process wall time includes startup, imports, calculation and saving.
+
+Peak resident memory includes libraries, data, autograd storage and allocator retention. Linux reads the executed image's `VmHWM` because `ru_maxrss` can retain a controller fork/exec startup floor. macOS uses `getrusage` with byte units. Each resource record states its source and baseline high-water mark. Controller memory is measured separately and other applications need additional headroom. This is resident memory, without a claim to count only tensor allocations or the whole machine's memory use.
+
+The recorded workspace uses Linux x86-64, Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu. The following costs are one quiet sequential measurement of the declared workload. They require separate MacBook verification and do not establish a hardware speed comparison.
+
+| Task | Fit seconds | Paired evaluation seconds | Process wall seconds | Peak resident MiB |
+| --- | ---: | ---: | ---: | ---: |
+| Numerical reference | N/A | N/A | 1.8182 | 179.54 |
+| Value-gradient | 13.5022 | 0.1051 | 15.9518 | 376.18 |
+| Terminal loss | 20.9084 | 0.0471 | 23.3203 | 338.66 |
+
+Controller peak resident memory is 256.54 MiB. The complete pilot takes 41.1304 seconds. Repeating both exact fits for three seeds projects 103.23 seconds of fitting or 103.69 seconds including the paired post-fit evaluations. References, process startup, tuning, higher dimensions and later stresses require additional allocation. Dimension scaling is not extrapolated from this single case. The later experiment lock will use the MacBook measurements to fix the actual schedule.
+
+### Code contract and reproduction
+
+`arithmetic_ten_case` owns the financial specification. `BasketReferencePricer` supplies the existing numerical contributions, geometric controls and sampling-unit uncertainty. `FBSNNSolver` and `TerminalBSDESolver` fit the payoff without an analytical oracle. `SolverRiskComparison.initial_risk` supplies the physical initial delta and diffusion diagnostics for the final independent check. Numerical reference values appear only in the pilot comparison report. Existing vanilla and geometric report shapes and analytical evaluations retain their established contracts.
+
+| Array | Shape in this pilot |
+| --- | --- |
+| Training states | (128, 17, 10) |
+| Independent Brownian increments | (128, 16, 10) |
+| Learned value-gradient outputs | (128, 17) |
+| Value-gradient coordinate deltas | (128, 16, 10) |
+| Terminal discounted controls | (128, 16, 10) |
+| Reference contribution vector per terminal state | (11,) for price and ten deltas |
+
+```bash
+python -m bsde_pricing describe --case arithmetic-ten
+python -m bsde_pricing arithmetic-pilot
+python -m unittest discover -s tests -v
+```
+
+The default protected directory is `scratch/runs/arithmetic_ten_pilot`. `design.json` is written before calculations. `reference.json` retains both Sobol sizes, the independent IID estimate, coefficients, replicate means, intervals and budget checks. Solver subdirectories retain selected checkpoints, final or continuation checkpoints and full histories. Resource records and logs describe each isolated task. The final `report.json` records source model/report digests, initial comparisons, runtime and budget projections. A failed child or comparison leaves a task-specific `failure.json` and retained evidence. A time-limited fit remains labelled time-limited. Existing outputs are never overwritten.
+
+All 91 tests pass with user warnings treated as errors in the workspace. New checks cover all ten arithmetic pathwise deltas against matched price bumps, reference-free fitting, validation selection, checkpoint round trips, uncertainty propagation in weight-scaled units, isolated subprocess output, protected directories, failure records and platform memory units. Existing scalar, geometric, autograd, continuation and risk tests also pass. The notebook executes all 27 code cells from a fresh IPython process with 19 figures. Three new code cells and three figures cover this pilot, preserving the exact earlier source and MacBook output cells. The repository audit reports zero errors and three curated-notebook review items.
+
+The implementation and workspace pilot are verified. MacBook fitting, resource measurement and executed notebook review remain the local completion checks.

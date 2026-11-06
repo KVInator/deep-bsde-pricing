@@ -308,3 +308,19 @@ def geometric_five_case() -> PricingCase:
         contract=EuropeanCall(100.0, 1.0, weights=(0.10, 0.15, 0.20, 0.25, 0.30), basket="geometric"),
         initial_spots=(90.0, 100.0, 110.0, 95.0, 105.0),
     )
+
+
+def arithmetic_ten_case() -> PricingCase:
+    """Equal-weight ten-asset development case with equicorrelation 0.30."""
+    dimension = 10
+    return PricingCase(
+        name="arithmetic-ten",
+        model=GBMModel(
+            rate=0.03, volatilities=(0.20,)*dimension,
+            dividend_yields=(0.0,)*dimension,
+            correlation=tuple(tuple(1.0 if i == j else 0.30 for j in range(dimension))
+                              for i in range(dimension)),
+        ),
+        contract=EuropeanCall(100.0, 1.0, weights=(0.10,)*dimension),
+        initial_spots=(100.0,)*dimension,
+    )

@@ -89,10 +89,12 @@ class GeometricBasketReference:
         )
 
 
-def call_reference(case: PricingCase) -> BlackScholesReference | GeometricBasketReference:
-    """Exact call reference for the supported neural training cases."""
+def call_reference(case: PricingCase) -> BlackScholesReference | GeometricBasketReference | None:
+    """Return an exact call reference when one is available for this basket."""
     if case.model.dimension == 1:
         return BlackScholesReference(case.model, case.contract)
+    if case.contract.basket == "arithmetic":
+        return None
     return GeometricBasketReference(case.model, case.contract)
 
 

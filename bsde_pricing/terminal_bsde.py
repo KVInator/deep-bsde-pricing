@@ -77,12 +77,12 @@ class TerminalEvaluation:
     discounted_controls: np.ndarray
     discounted_payoffs: np.ndarray
     terminal_residuals: np.ndarray
-    analytical_terminal_residuals: np.ndarray
+    analytical_terminal_residuals: np.ndarray | None
     summary: dict[str, object]
 
 
 class TerminalBSDESolver:
-    """Terminal-payoff fitting for vanilla and geometric GBM calls."""
+    """Terminal-payoff fitting for European GBM basket calls."""
 
     def __init__(self, case: PricingCase, config: PathTrainingConfig = PathTrainingConfig()):
         if type(config) is not PathTrainingConfig:
@@ -108,12 +108,12 @@ class TerminalBSDESolver:
         values, _ = self.network(states, increments)
         return ((values[:, -1]-self._payoffs(states))/self.case.contract.strike).square().mean()
 
-    def initial_value(self) -> dict[str, float | list[float]]:
+    def initial_value(self) -> dict[str, float | list[float] | None]:
         price = float((self.network.value_scale*self.network.initial_value).detach())
         spots = self.case.initial_spots[0] if self.case.model.dimension == 1 else self.case.initial_spots
-        target = self.reference.evaluate(spots).call_price
+        target = None if self.reference is None else self.reference.evaluate(spots).call_price
         control = (self.network.control_scale*self.network.initial_control).detach()
-        return {"price": price, "reference_price": target, "price_error": price-target,
+        return {"price": price, "reference_price": target, "price_error": None if target is None else price-target,
                 "discounted_initial_control": control.tolist()}
 
     def _evaluate(self, rng: np.random.Generator, n_paths: int) -> TerminalEvaluation:
@@ -125,12 +125,13 @@ class TerminalBSDESolver:
         problem = PricingBSDE(self.case.model, self.case.contract)
         # This matched-path oracle is descriptive and never enters training or selection.
         spots = states.numpy()
-        analytical_deltas = reference_deltas_on_grid(self.reference, spots, self.times)
-        analytical_controls = problem.control(spots[:, :-1], analytical_deltas)*self.discount[None, :-1, None]
         initial = self.initial_value()
-        reference_price = initial["reference_price"]
-        analytical_terminal = reference_price+(analytical_controls*increments.numpy()).sum(axis=(1, 2))
-        analytical_residuals = analytical_terminal-payoffs.numpy()
+        analytical_residuals = None
+        if self.reference is not None:
+            analytical_deltas = reference_deltas_on_grid(self.reference, spots, self.times)
+            analytical_controls = problem.control(spots[:, :-1], analytical_deltas)*self.discount[None, :-1, None]
+            analytical_terminal = initial["reference_price"]+(analytical_controls*increments.numpy()).sum(axis=(1, 2))
+            analytical_residuals = analytical_terminal-payoffs.numpy()
         stochastic_integral = values[:, -1].numpy()-initial["price"]
         rmse = float(np.sqrt(np.mean(residuals**2)))
         summary = {
@@ -143,7 +144,8 @@ class TerminalBSDESolver:
             "terminal_residual_quantiles": dict(zip(("0.05", "0.50", "0.95"), map(float, np.quantile(residuals, (0.05, 0.5, 0.95))))),
             "stochastic_integral_mean": float(np.mean(stochastic_integral)),
             "stochastic_integral_mean_se": float(np.std(stochastic_integral, ddof=1)/math.sqrt(n_paths)),
-            "analytical_discounted_terminal_rmse": float(np.sqrt(np.mean(analytical_residuals**2))),
+            "analytical_discounted_terminal_rmse": (None if analytical_residuals is None else
+                                                     float(np.sqrt(np.mean(analytical_residuals**2)))),
         }
         controls = controls.numpy()
         if self.case.model.dimension == 1:
@@ -151,7 +153,8 @@ class TerminalBSDESolver:
         arrays = [self.times.copy(), spots.copy(), values.numpy(), controls,
                   payoffs.numpy(), residuals, analytical_residuals]
         for array in arrays:
-            array.setflags(write=False)
+            if array is not None:
+                array.setflags(write=False)
         return TerminalEvaluation(*arrays, summary)
 
     def evaluate(self, *, n_paths: int = 512, seed: int = 2027) -> TerminalEvaluation:
@@ -231,7 +234,8 @@ class TerminalBSDESolver:
                 "training_seconds": training_seconds, "evaluation_seconds": evaluation_seconds,
                 "history": history, "evaluation": evaluation, "last_evaluation": last_evaluation,
                 "inspection_targets": {"price_absolute_error": 0.25},
-                "targets_met": {"price": abs(evaluation["initial"]["price_error"]) <= 0.25},
+                "targets_met": (None if self.reference is None else
+                                {"price": abs(evaluation["initial"]["price_error"]) <= 0.25}),
                 "checkpoint_support": "inference_only; no optimiser continuation"}
 
     def save(self, directory: Path, report: dict[str, object]) -> None:
