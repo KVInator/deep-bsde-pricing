@@ -1573,4 +1573,14 @@ The default protected directory is `scratch/runs/arithmetic_ten_pilot`. `design.
 
 All 91 tests pass with user warnings treated as errors in the workspace. New checks cover all ten arithmetic pathwise deltas against matched price bumps, reference-free fitting, validation selection, checkpoint round trips, uncertainty propagation in weight-scaled units, isolated subprocess output, protected directories, failure records and platform memory units. Existing scalar, geometric, autograd, continuation and risk tests also pass. The notebook executes all 27 code cells from a fresh IPython process with 19 figures. Three new code cells and three figures cover this pilot, preserving the exact earlier source and MacBook output cells. The repository audit reports zero errors and three curated-notebook review items.
 
-The implementation and workspace pilot are verified. MacBook fitting, resource measurement and executed notebook review remain the local completion checks.
+The implementation, workspace pilot and MacBook evidence are verified.
+
+### MacBook verification
+
+The MacBook pilot completes both 3,000-update fits and all 91 tests pass in 6.484 seconds. It uses macOS 27.0.1 ARM64, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 on CPU float64. Validation selects updates 3,000 and 2,900, matching the workspace. Initial prices and delta errors agree to floating-point precision. Standardised independent-reference differences agree within 1.6e-12, including the retained coordinate discrepancies.
+
+The primary price remains 6.40618406 with pointwise 95% half-width 0.00036192. Both reference precision allocations are met. Price errors remain +0.13899423 for value-gradient and +0.01152083 for terminal loss. Both miss the original 0.01 price target. All ten value-gradient weight-scaled delta intervals are outside their target bands. Terminal loss has nine outside and coordinate two unresolved. Initial bounds and diffusion reconstruction pass. These results retain the distinction between algebraic correctness and learned financial accuracy.
+
+Fitting takes 8.9192 seconds for value-gradient and 17.1385 seconds for terminal loss. Worker peak resident memory is 339.05 MiB and 308.08 MiB respectively, with 336.56 MiB for the reference and a separate controller peak of 210.13 MiB. The complete pilot takes 31.8233 seconds. Repeating this exact pair of fits for three seeds projects 78.60 seconds including paired post-fit evaluation. Startup, references, tuning, higher dimensions and other applications require additional allocation. These are scheduling observations for this MacBook workload.
+
+The supplied terminal summary agrees with the attached full report. The pushed notebook has unchanged source, 27 sequential executed code cells and 19 complete figures with no error or stderr outputs. Its first 16 figures match the previous verified outputs byte for byte. The three arithmetic figures and nine tables retain reference uncertainty, all coordinate errors, independent-method discrepancies and local resource costs. [Notebook 7700427](https://github.com/KVInator/deep-bsde-pricing/commit/7700427371d9fb921bc88f016dd28303bce3cabd)
