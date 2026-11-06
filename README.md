@@ -83,6 +83,14 @@ The pilot runs one equal-weight arithmetic case, an independent numerical refere
 
 The workspace reference price is 6.40618406 with a pointwise 95% half-width of 0.00036192. Value-gradient and terminal-loss price errors are +0.13899423 and +0.01152083. Both miss the roadmap's 0.01 price target, and neither meets all weight-scaled delta targets. The reference intervals meet the allocated precision budget. These are one-seed development results. The [arithmetic pilot](docs/methodology.md#ten-asset-arithmetic-pilot) retains every coordinate, the independent-method discrepancies and measured costs. Sections 23-25 of the neural notebook read these saved results.
 
+## Experiment design
+
+```bash
+python -m bsde_pricing experiment-design --output scratch/experiment_design.json
+```
+
+The command validates [experiments/design.json](experiments/design.json), reports its SHA-256 fingerprint and exports the 78 reserved neural jobs. It draws no samples and starts no training. The design fixes cases, final seeds, accuracy targets, reference refinement and resource limits for the later suite. The [experiment protocol](docs/methodology.md#locked-experiment-design) explains selection, uncertainty, failure reporting and the measured MacBook budget. Final evaluation remains reserved until the locked suite runs.
+
 ## Environment
 
 ```bash

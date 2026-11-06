@@ -1584,3 +1584,74 @@ The primary price remains 6.40618406 with pointwise 95% half-width 0.00036192. B
 Fitting takes 8.9192 seconds for value-gradient and 17.1385 seconds for terminal loss. Worker peak resident memory is 339.05 MiB and 308.08 MiB respectively, with 336.56 MiB for the reference and a separate controller peak of 210.13 MiB. The complete pilot takes 31.8233 seconds. Repeating this exact pair of fits for three seeds projects 78.60 seconds including paired post-fit evaluation. Startup, references, tuning, higher dimensions and other applications require additional allocation. These are scheduling observations for this MacBook workload.
 
 The supplied terminal summary agrees with the attached full report. The pushed notebook has unchanged source, 27 sequential executed code cells and 19 complete figures with no error or stderr outputs. Its first 16 figures match the previous verified outputs byte for byte. The three arithmetic figures and nine tables retain reference uncertainty, all coordinate errors, independent-method discrepancies and local resource costs. [Notebook 7700427](https://github.com/KVInator/deep-bsde-pricing/commit/7700427371d9fb921bc88f016dd28303bce3cabd)
+
+## Locked experiment design
+
+### Scope and workload
+
+`experiments/design.json` is the authoritative machine-readable specification. `ExperimentDesign` validates its financial cases, configuration and stream separation, then enumerates the reserved jobs. The canonical sorted-JSON SHA-256 fingerprint identifies the exact design. Every later run must retain this fingerprint with its source commit and configuration. A changed fingerprint requires a documented protocol amendment before final evaluation. The present command validates and exports a plan. Training, sampling, resource enforcement and result collection are implemented in their later stages.
+
+The six primary cases are vanilla, the existing unequal five-asset geometric basket, and equal-weight arithmetic baskets with 10, 25, 50 and 100 assets. Arithmetic base inputs retain spots and strike 100, maturity one year, rate 3%, volatility 20%, no dividends and correlation 0.30. The unequal geometric case retains its full existing specification. No Cartesian product of parameters is scheduled.
+
+| Comparison | Cases and grids | Fits across both solvers and three seeds |
+| --- | --- | ---: |
+| Primary dimension ladder | Six cases, 16 intervals each | 36 |
+| Time-grid sensitivity | Arithmetic 10, additional 10, 20 and 40 intervals | 18 |
+| Financial stresses | Arithmetic 10 with strike 90, strike 110, maturity 0.25 or correlation 0.80, changed separately | 24 |
+| Total | Ten financial cases and thirteen case/grid combinations | 78 |
+
+The time-grid study reuses the 16-interval baseline. Numerical initial references are reused across grids of the same financial case. A fixed-start neural model is refitted for every changed financial case. Every row includes both formulations, every declared seed and any failure. An unavailable high-dimensional case stays in the results with its reason.
+
+### Training and reserved streams
+
+The common training configuration remains 3,000 updates, width 16, batch 128, learning rate 0.001, 256 validation paths and 2,048 post-fit evaluation paths. CPU float64 and one CPU thread remain the baseline. Value-gradient terminal weight is one, patience is disabled and the existing learning-rate schedule applies. Terminal controls retain separate time-step networks. Parameter counts vary with dimension and grid, and are reported explicitly. The lock allows zero further architecture or hyperparameter trials. Development investigates correctness and scaling under this configuration, retaining misses.
+
+Development uses seeds 2026, 2027 and 2028. Final training reserves 41001, 41002 and 41003. Within each training seed, SeedSequence children zero, one and two retain training, validation and post-fit ownership. The two solvers share the declared forward stream for paired comparisons. A seed is reused across cases deliberately, while each financial case is a distinct fit. Across-seed spread is reported without selecting the best seed.
+
+For zero-based case index j in the specification, final reference, independent reference check and common-path evaluation seeds are 42000+j, 42500+j and 43000+j. Coefficient-pilot and final estimator-evaluation seeds are 48000+j and 49000+j. Within estimator streams, method and repetition identifiers are explicit spawn-key components. Common evaluation paths may pair frozen solvers. A coefficient pilot must never share its evaluation increments. The validator checks disjoint top-level seed namespaces without instantiating a generator. Final namespaces remain unused until the final suite.
+
+Checkpoints minimise the solver's scheduled validation objective. Held-out price or delta error never selects weights, updates, architecture or seeds. Selected and final-update diagnostics remain distinguishable. A bug correction records both the failed attempt and the corrected source, with the same declared configuration and seed. Accuracy misses do not authorise more training or a different seed.
+
+### Targets, uncertainty and conclusions
+
+For initial price p and coordinate deltas, the original targets remain
+
+\[
+|\widehat p-p_*|\le 0.01,\qquad
+\left|\frac{\widehat\Delta_i-\Delta_{*,i}}{w_i}\right|\le0.01.
+\]
+
+Dividing by the basket weight avoids making a small raw coordinate error appear automatically accurate as dimension grows. Analytical references have no simulation interval. Numerical-reference pointwise 95% half-widths must be at most 0.002 for price and 0.002 for each weight-scaled delta. A learned estimate v and reference interval [a,b] produce signed error interval [v-b,v-a], with weight scaling applied to delta. Whole-interval inclusion is within target, whole-interval exclusion is outside target, and boundary crossing is unresolved. Reference precision failure makes that comparison inconclusive. Pointwise intervals supply no simultaneous coverage claim across coordinates or cases.
+
+Report each seed, signed error, maximum absolute weight-scaled delta error, directional delta sum, initial bound violations and diffusion conditioning/reconstruction. Across seeds report mean, sample standard deviation and range, keeping individual failures. Price accuracy and delta accuracy are separate conclusions. Conditional path-risk RMSE is reported only where a justified conditional reference exists. Gamma remains a selected vanilla value-gradient diagnostic, with derivative consistency and financial accuracy assessed separately.
+
+The arithmetic reference uses the existing geometric-control Sobol and antithetic contributions. The predeclared allocation ladder is 16 scrambles of 2^16 points followed, only if needed, by 2^18 points. The independent antithetic check has 131,072 then 524,288 pairs. Each method has a separate 4,096-pair coefficient pilot. At the first level meeting every required half-width and the four-combined-standard-error method-agreement screen, retain that reference. Otherwise advance once, then label the reference unresolved if requirements still fail. Retain both attempted levels, coefficients, scramble means and method differences. The second level uses the same scramble seeds and is dependent on the first. The screen is a discrepancy diagnostic, with no assertion that it proves confidence-interval coverage.
+
+Larger reference allocations require bounded chunks of 4,096 terminal states and streaming statistics in the later implementation. Never allocate the whole largest high-dimensional sample merely because its point count is declared. Reference generation has its own time and memory limits and cannot borrow unused neural budgets to obtain a favourable conclusion.
+
+### Resource rules and cost accounting
+
+The MacBook ten-asset pilot measures 8.9192 and 17.1385 seconds of fitting, with peak worker memory below 340 MiB. Three repetitions of this exact pair project 78.60 seconds including paired evaluation. Those observations justify a small common baseline. They supply no linear extrapolation to 100 assets or 40 time intervals.
+
+The declared fitting soft cap is 180 seconds per fit. Each isolated neural worker has a 300-second total wall limit and 2,048 MiB resident-memory limit. Reference workers have 180 seconds per allocation level and the same memory limit. Execution is sequential. Conditional path evaluation uses chunks of at most 128 paths to bound batched diffusion and derivative storage. A future runner must monitor worker RSS, stop a limit breach and retain its resource-limit status. Current pilot commands retain their existing behaviour and do not implement the newly declared memory guard.
+
+The 78 scheduled fits give a maximum fitting allowance of 3.9 hours and a neural-worker wall allowance of 6.5 hours. Eight numerical financial references at two levels have at most 48 minutes of worker time. The full final study has an eight-hour wall ceiling across resumable sessions, including references and estimator comparisons. These are ceilings, rather than predicted runtimes. A ceiling reached before later rows produces explicit not-attempted-budget rows. The fixed matrix is retained. No case is quietly removed and no limit is raised after inspecting final accuracy.
+
+Costs retain optimisation, checkpoint validation, final evaluation, reference construction, coefficient fitting, process startup and inference separately. Include the earlier development/tuning cost in any end-to-end efficiency claim. A single-query comparison includes training. An amortised comparison states the repeated workload and exactly which fixed-case checkpoints are reused. No hardware or precision speed ranking follows from unmatched workloads.
+
+### Estimator comparison and failure reporting
+
+The bounded estimator study uses arithmetic 10 at antithetic-pair allocations 4,096, 16,384 and 65,536 with 16 independent repetitions. Compare antithetic/geometric-control MC, scrambled Sobol/geometric-control estimates and frozen controls from both neural formulations. Known analytical martingale controls are first verified on the geometric-five case, whose price and controls are available exactly. They are not presented as exact arithmetic-basket controls. Sobol estimator allocations use equal total terminal-state counts, with 16 independent scrambles. Pair counts and scramble counts remain their appropriate uncertainty units.
+
+Any fitted martingale coefficient uses an independent 4,096-pair pilot. The learned network is frozen before these paths. Report variance, standard error, mean error against the independent reference and total elapsed cost. Variance reduction that fails, increases variance or cannot amortise training stays visible. Left-endpoint adaptation and zero-mean-integral checks precede learned-control evaluation. The final repetitions use the reserved estimator namespace and remain untouched during development.
+
+Every planned result row receives completed, accuracy-miss, reference-inconclusive, time-limit, memory-limit, numerical-failure or not-attempted-budget status, with raw diagnostics and provenance. Several labels can apply to a completed calculation, so execution status and accuracy assessment are separate fields. There is no aggregate success claim that excludes failures or unresolved references. Further architectures, full stress grids, nonlinear drivers and extra seed searches require separately scoped work after this core release.
+
+### Validate the plan
+
+```bash
+python -m bsde_pricing experiment-design --output scratch/experiment_design.json
+python -m unittest discover -s tests -v
+```
+
+The console prints the design fingerprint, counts and budgets. The JSON export additionally lists all reserved jobs. This step starts no training and draws no final random samples. It adds no notebook output because it introduces a protocol rather than another numerical experiment.

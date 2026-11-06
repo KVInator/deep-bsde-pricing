@@ -240,14 +240,26 @@ def main() -> None:
     risk.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_risk_comparison"))
     risk.add_argument("--paths", type=int, default=2048)
     risk.add_argument("--seed", type=int, default=2031)
+    design = commands.add_parser("experiment-design", help="validate the specification and export reserved jobs without running them")
+    design.add_argument("--spec", type=Path)
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
-                    basket_reference, bsde_diagnostic, autograd, bsde_loss):
+                    basket_reference, bsde_diagnostic, autograd, bsde_loss, design):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
     args = parser.parse_args()
 
     try:
+        if args.command == "experiment-design":
+            from .experiment_design import ExperimentDesign
+
+            summary = ExperimentDesign.load(args.spec).summary()
+            report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(report+"\n")
+            print(json.dumps({k: v for k, v in summary.items() if k != "jobs"}, indent=2, sort_keys=True, allow_nan=False))
+            return
         if args.command == "arithmetic-pilot":
             from .arithmetic_pilot import ArithmeticPilot, ArithmeticPilotConfig
             from .training import PathTrainingConfig

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "status": "locked_before_confirmatory_runs",
+  "cases": [
+    {"name": "vanilla", "family": "vanilla", "dimension": 1},
+    {"name": "geometric-five", "family": "geometric", "dimension": 5},
+    {"name": "arithmetic-10", "family": "arithmetic", "dimension": 10},
+    {"name": "arithmetic-25", "family": "arithmetic", "dimension": 25},
+    {"name": "arithmetic-50", "family": "arithmetic", "dimension": 50},
+    {"name": "arithmetic-100", "family": "arithmetic", "dimension": 100},
+    {"name": "arithmetic-10-strike-90", "family": "arithmetic", "dimension": 10, "strike": 90.0},
+    {"name": "arithmetic-10-strike-110", "family": "arithmetic", "dimension": 10, "strike": 110.0},
+    {"name": "arithmetic-10-short", "family": "arithmetic", "dimension": 10, "maturity": 0.25},
+    {"name": "arithmetic-10-correlation-80", "family": "arithmetic", "dimension": 10, "correlation": 0.8}
+  ],
+  "base_arithmetic": {"spot": 100.0, "strike": 100.0, "maturity": 1.0, "rate": 0.03, "volatility": 0.2, "dividend": 0.0, "correlation": 0.3},
+  "training": {"iterations": 3000, "batch_size": 128, "width": 16, "learning_rate": 0.001, "log_every": 100, "validation_paths": 256, "evaluation_paths": 2048, "max_seconds": 180, "terminal_weight": 1, "patience": null, "base_steps": 16},
+  "grid_case": "arithmetic-10",
+  "grid_steps": [10, 20, 40],
+  "solvers": ["value_gradient", "terminal_loss"],
+  "development_seeds": [2026, 2027, 2028],
+  "final_training_seeds": [41001, 41002, 41003],
+  "final_streams": {"reference_seed_base": 42000, "independent_check_seed_base": 42500, "path_evaluation_seed_base": 43000, "coefficient_pilot_seed_base": 48000, "estimator_evaluation_seed_base": 49000},
+  "targets": {"price_absolute": 0.01, "weight_scaled_delta_absolute": 0.01, "reference_fraction": 0.2, "confidence_level": 0.95},
+  "reference": {"sobol_powers": [16, 18], "scrambles": 16, "pilot_pairs": 4096, "check_pairs": [131072, 524288], "agreement_standard_errors": 4, "max_worker_seconds_per_level": 180, "chunk_terminal_states": 4096},
+  "resources": {"worker_wall_seconds": 300, "worker_peak_resident_mib": 2048, "evaluation_chunk_paths": 128, "sequential_workers": true, "final_total_wall_hours": 8},
+  "tuning": {"additional_architectures": 0, "additional_hyperparameter_trials": 0, "checkpoint_selection": "minimum scheduled solver validation objective", "final_accuracy_selects_checkpoint": false},
+  "estimators": {"reference_case": "arithmetic-10", "antithetic_pairs": [4096, 16384, 65536], "repetitions": 16, "coefficient_pilot_pairs": 4096, "methods": ["antithetic_geometric_control", "scrambled_sobol_geometric_control", "analytical_martingale_control", "value_gradient_martingale_control", "terminal_loss_martingale_control"], "known_control_case": "geometric-five"}
+}
