@@ -1835,4 +1835,28 @@ python -m unittest discover -s tests -v
 
 Outputs are protected under `scratch/runs/arithmetic_50_development`. The diagnostic, reference and each seed have separate records. All 99 tests pass with user warnings treated as errors. The new timing check verifies workload coverage and thread restoration. Existing streaming, resource-limit, checkpoint and financial regressions pass. The neural notebook executes 33 code cells and renders 25 figures, with three appended code cells and three new figures. Earlier MacBook source/output cells are preserved exactly.
 
-The implementation and workspace experiment are verified. MacBook execution and pushed notebook review remain the completion checks for this dimensional step.
+### MacBook verification
+
+The MacBook study and pushed notebook were reviewed on 6 November 2026. All 99 tests pass in 15.643 seconds. The package source digests and locked specification fingerprint match the workspace. All six fits complete 3,000 updates and select the same checkpoints. Financial estimates reproduce to floating-point precision; standardised reference diagnostics differ by at most 4.7e-12. The independent reference passes precision and agreement checks at the first allocation.
+
+| Seed | Model | Selected update | Price error | Maximum absolute scaled delta error | Fit seconds | Worker peak MiB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 2026 | Value-gradient | 2900 | -0.03687480 | 0.16338050 | 19.2537 | 413.28 |
+| 2026 | Terminal loss | 3000 | -0.01627344 | 0.57630551 | 22.9149 | 381.92 |
+| 2027 | Value-gradient | 2900 | +0.02644089 | 0.19639441 | 17.6590 | 486.67 |
+| 2027 | Terminal loss | 2900 | -0.04104640 | 0.49611509 | 22.9055 | 375.59 |
+| 2028 | Value-gradient | 2900 | +0.04692211 | 0.23203505 | 18.2689 | 442.86 |
+| 2028 | Terminal loss | 2800 | -0.03544812 | 0.43993238 | 24.5956 | 379.55 |
+
+All six miss the original 0.01 price target, and no selected model meets every weight-scaled coordinate-delta target. Terminal-loss initial delta bound violations remain 4, 3 and 4, while value-gradient has none. Completing the dimensional step records these accuracy failures; it does not change the targets or justify a universal ranking of the formulations.
+
+Total local study wall time is 146.0971 seconds. The largest training-worker peak is 486.67 MiB, the reference peak is 181.53 MiB and controller peak is separately 210.19 MiB. All task and resource guards pass on the 8 GiB MacBook. Runtime is macOS 27.0.1 arm64, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0, using CPU float64 and one thread.
+
+| Model | Path sampling ms | Objective forward ms | Backward ms | Adam step ms | Largest median component |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Terminal loss | 2.6017 | 1.7850 | 0.9772 | 0.8975 | sample_paths |
+| Value-gradient | 2.7067 | 2.0885 | 0.8744 | 0.0985 | sample_paths |
+
+Path sampling is again the largest single median component for both fresh diagnostic models. These short component measurements retain the workload and interpretation limits stated above. They do not profile the whole fit or establish a general hardware speed comparison.
+
+The [executed notebook at 639b693](https://github.com/KVInator/deep-bsde-pricing/commit/639b693ff3a884c0f908bdc4facf54d2ada28a06) has unchanged source, 33 sequential executed code cells and 25 complete figures, with no recorded errors or stderr. The first 22 figures are byte-identical to the previously reviewed notebook. The three new figures and eight tables agree with the supplied report, whose summary also matches the terminal output. Milestone 21 is complete. The next step is the bounded 100-asset attempt under the existing experiment specification and resource rules.
