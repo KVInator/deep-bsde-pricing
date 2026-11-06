@@ -245,6 +245,8 @@ def main() -> None:
     development = commands.add_parser("development-study", help="run the bounded arithmetic development case with three seeds")
     development.add_argument("--case", choices=("arithmetic-25", "arithmetic-50", "arithmetic-100"), default="arithmetic-25")
     development.add_argument("--run-dir", type=Path)
+    grid_study = commands.add_parser("grid-study", help="compare the locked time grids at development seeds")
+    grid_study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/arithmetic_10_grid_study"))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss, design):
         command.add_argument(
@@ -253,12 +255,13 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        if args.command == "development-study":
-            from .development_study import ArithmeticDevelopmentStudy
+        if args.command in ("development-study", "grid-study"):
+            from .development_study import ArithmeticDevelopmentStudy, TimeGridStudy
 
             if args.run_dir is None:
                 args.run_dir = Path("scratch/runs")/f"{args.case.replace('-', '_')}_development"
-            result = ArithmeticDevelopmentStudy(args.case).run(args.run_dir)
+            study = TimeGridStudy() if args.command == "grid-study" else ArithmeticDevelopmentStudy(args.case)
+            result = study.run(args.run_dir)
             print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
                               "specification_sha256": result["specification_sha256"],
                               "reference_usable": result["reference_usable"], "reference_levels": result["reference_levels"],

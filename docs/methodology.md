@@ -1943,3 +1943,94 @@ Total local study wall time is 266.7802 seconds. Largest training-worker peak is
 Path sampling remains the largest single median component of both fresh diagnostic workloads. The profile covers two warmups and seven measured updates and supplies no saved-fit accuracy or checkpoint choices. These local timings retain the interpretation limits above.
 
 The [executed notebook at 71f0bd4](https://github.com/KVInator/deep-bsde-pricing/commit/71f0bd4bb8964e9c3bd15f943d78160b53d0aa41) has unchanged source, 36 sequential executed code cells and 28 complete figures, without errors or stderr. Its first 25 figures are byte-identical to prior reviewed evidence. The three new plots and eight tables retain the report's dimensional comparison, every coordinate error and local costs. The terminal summary matches the supplied full report. Milestone 22 is complete with computational feasibility and substantial risk failures both recorded. The next step is the declared time-grid study.
+
+## Time-grid development study
+
+### What refinement changes
+
+The locked ten-asset arithmetic basket is evaluated on 10, 20 and 40 uniform intervals, with time steps 0.10, 0.05 and 0.025 years. Financial inputs and independent terminal reference remain fixed. Each resolution uses both solvers and development seeds 2026, 2027 and 2028, giving 18 fits. Width 16, batch 128, 3,000 Adam updates, learning-rate schedule and validation-only checkpoint rules remain unchanged. Final evaluation streams are unused.
+
+The forward state uses exact GBM transitions,
+
+\[
+S_{i,n+1}=S_{i,n}\exp\!\left[(r-q_i-\tfrac12\sigma_i^2)\Delta t
++\sigma_i(L\Delta B_n)_i\right].
+\]
+
+There is no Euler approximation to the forward transition. Refining the grid changes the approximation of the discounted stochastic integral by adapted left-endpoint controls, and the local residual constraints in the value-gradient objective. If \(\widetilde Z_t=e^{-rt}Z_t\), Itô isometry gives, for square-integrable adapted controls,
+
+\[
+\mathbb E\left[\left(\int_0^T
+(\widetilde Z_t-\widetilde Z_{\lfloor t\rfloor_M})\cdot dB_t\right)^2\right]
+=\mathbb E\int_0^T\|\widetilde Z_t-\widetilde Z_{\lfloor t\rfloor_M}\|^2dt.
+\]
+
+Here \(\lfloor t\rfloor_M\) denotes the left grid endpoint. This identity concerns a specified control and its time approximation. It does not guarantee that separately trained finite networks recover that control, or that an optimiser reaches comparable accuracy at every grid. Payoff kinks, approximation error, checkpoint selection and seed variability remain relevant.
+
+The terminal solver uses a distinct control subnetwork at each later grid date. Its trainable parameter count is \(11+618(M-1)\): 5,573, 11,753 and 24,113 for the three grids. The value-gradient network stays at 481 parameters. Training states have shape \((128,M+1,10)\), independent increments \((128,M,10)\), and work per update grows with \(M\). Equal update counts are neither equal computational cost nor equal model capacity.
+
+Seed labels repeat across resolutions, but random paths are not coupled by aggregating fine increments into coarse increments. Connected seed points in the plots are descriptive, without paired Monte Carlo uncertainty or a guaranteed common terminal sample. Three development seeds and three grid levels do not establish a convergence order.
+
+### Shared reference and execution
+
+`TimeGridStudy` reuses the existing case construction, reference refinement, guarded workers, fit/checkpoint logic and independent comparison. One reference allocation procedure runs at the study root; every grid receives the same retained reference. Exact-terminal estimates do not depend on the training path grid. Source digests, the unchanged specification fingerprint, actual grid configurations and all task outcomes identify the experiment. A report is saved after each attempted seed pair. Failed or capped tasks remain represented.
+
+
+The study status is `completed`, with 18 scheduled fits. Reference usable is `True`. The primary price is 6.40618406, pointwise 95% half-width 0.00036192, and maximum weight-scaled delta half-width 0.00033689. The same reference uncertainty applies across all comparisons; it is not independent noise for each fit. Coordinate intervals are pointwise, without simultaneous coverage.
+
+| Intervals | Seed | Model | Selected / completed update | Price error | Price target | Maximum absolute scaled delta error | Bound violations |
+| ---: | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| 10 | 2026 | Terminal loss | 2500 / 3000 | -0.01217574 | outside_target | 0.09040883 | 0 |
+| 10 | 2026 | Value-gradient | 2800 / 3000 | -0.04854929 | outside_target | 0.09369262 | 0 |
+| 10 | 2027 | Terminal loss | 2700 / 3000 | +0.01645542 | outside_target | 0.09010849 | 0 |
+| 10 | 2027 | Value-gradient | 3000 / 3000 | +0.13537029 | outside_target | 0.06382426 | 0 |
+| 10 | 2028 | Terminal loss | 2700 / 3000 | -0.00726494 | within_target | 0.07898024 | 0 |
+| 10 | 2028 | Value-gradient | 3000 / 3000 | -0.21089665 | outside_target | 0.09299963 | 0 |
+| 20 | 2026 | Terminal loss | 2600 / 3000 | -0.02390259 | outside_target | 0.07616355 | 0 |
+| 20 | 2026 | Value-gradient | 3000 / 3000 | +0.00698055 | within_target | 0.11027262 | 0 |
+| 20 | 2027 | Terminal loss | 2700 / 3000 | +0.06122804 | outside_target | 0.05538675 | 0 |
+| 20 | 2027 | Value-gradient | 3000 / 3000 | +0.14307389 | outside_target | 0.10322573 | 0 |
+| 20 | 2028 | Terminal loss | 2800 / 3000 | -0.01547194 | outside_target | 0.05301867 | 0 |
+| 20 | 2028 | Value-gradient | 2900 / 3000 | -0.03837356 | outside_target | 0.10687429 | 0 |
+| 40 | 2026 | Terminal loss | 2400 / 3000 | +0.03513857 | outside_target | 0.08271798 | 0 |
+| 40 | 2026 | Value-gradient | 3000 / 3000 | +0.02067241 | outside_target | 0.11004393 | 0 |
+| 40 | 2027 | Terminal loss | 2900 / 3000 | -0.01390732 | outside_target | 0.07574115 | 0 |
+| 40 | 2027 | Value-gradient | 3000 / 3000 | +0.15928519 | outside_target | 0.14713588 | 0 |
+| 40 | 2028 | Terminal loss | 2700 / 3000 | +0.01387564 | outside_target | 0.07703734 | 0 |
+| 40 | 2028 | Value-gradient | 3000 / 3000 | +0.00609898 | within_target | 0.14694723 | 0 |
+
+| Intervals | Model | Price targets met / compared | All delta targets met / compared |
+| ---: | --- | ---: | ---: |
+| 10 | Value-gradient | 0 / 3 | 0 / 3 |
+| 10 | Terminal loss | 1 / 3 | 0 / 3 |
+| 20 | Value-gradient | 1 / 3 | 0 / 3 |
+| 20 | Terminal loss | 0 / 3 | 0 / 3 |
+| 40 | Value-gradient | 1 / 3 | 0 / 3 |
+| 40 | Terminal loss | 0 / 3 | 0 / 3 |
+
+All 18 fits complete 3,000 updates. There is no consistent reduction in independent price and delta errors across these grids. Terminal loss's worst-coordinate error decreases from 10 to 20 intervals for each seed, then increases at 40. Value-gradient's worst-coordinate errors are larger at 40 than at 10 for every seed. The three price-target successes occur at different seed/grid/formulation combinations. Every initial delta satisfies its financial bounds, but no fit meets all coordinate-accuracy targets. These observations concern the declared finite-budget configurations; they do not establish failure of a limiting BSDE method or isolate a discretisation convergence rate.
+
+Delta errors are divided by the basket weight 0.10 before comparison with the 0.01 target. Price errors use the unchanged 0.01 currency-unit target. All ten coordinate estimates, uncertainty intervals, directional deltas and bound checks remain in each report. A small signed average across seeds does not certify the individual fits. Conditional arithmetic path-risk references remain unavailable.
+
+### Validation objectives and computational cost
+
+The selected validation objectives are retained in task records and the notebook. Value-gradient minimises a path mean of the sum of squared scaled local residuals plus terminal mismatch. Terminal loss minimises scaled propagated terminal mismatch. Their magnitudes differ in meaning. A decreasing summed local loss under refinement does not, by itself, establish convergence of prices or Greeks. No grid is selected by these independent numerical errors, and no new tuning is performed.
+
+| Intervals | Model | Fit seconds, min-max | Training-worker peak MiB, min-max |
+| ---: | --- | --- | --- |
+| 10 | Value-gradient | 12.1072-13.0579 | 346.71-346.89 |
+| 10 | Terminal loss | 15.4965-16.9492 | 321.36-323.32 |
+| 20 | Value-gradient | 18.4535-18.6211 | 377.61-379.30 |
+| 20 | Terminal loss | 28.4567-30.9250 | 333.12-333.71 |
+| 40 | Value-gradient | 34.8080-35.2638 | 445.05-446.50 |
+| 40 | Terminal loss | 58.7383-63.4323 | 354.89-356.06 |
+
+Total workspace wall time is 595.3359 seconds, with controller peak separately 234.09 MiB. The run uses Linux x86-64, Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu with CPU float64 and one thread. Each fit retains its actual completed updates, selected checkpoint, runtime, evaluation time and worker guards. Reference and comparison costs are separate retained records. Timing observations describe this CPU float64 workspace workload rather than a general hardware or matched-precision speed comparison.
+
+
+```bash
+python -m bsde_pricing grid-study
+python -m unittest discover -s tests -v
+```
+
+Outputs are protected under `scratch/runs/arithmetic_10_grid_study`. All 101 tests pass with user warnings treated as errors, including shared-reference reuse, real reduced-grid fits, grid-specific checkpoint configurations, parameter-count behaviour, existing-directory protection and retained failures. Existing dimension-study checks also pass after extraction of the shared operations. The neural notebook executes 39 code cells and renders 31 figures; sections 35-37 add every seed's independent error, all coordinate errors, costs, parameter counts and validation objectives. Earlier MacBook cells are preserved. MacBook execution and pushed notebook review remain pending.

@@ -109,6 +109,14 @@ python -m bsde_pricing development-study --case arithmetic-100
 
 The final planned dimension uses the existing bounded runner and unchanged training settings, seeds, reference checks and process limits. Results are protected under `scratch/runs/arithmetic_100_development`. Notebook sections 32-34 compare the 25-, 50- and 100-asset cases, display every initial coordinate error and retain all task outcomes and measured costs. The [hundred-asset results](docs/methodology.md#hundred-asset-arithmetic-development) distinguish nominal dimension, diversification, numerical accuracy and computational feasibility. Final evaluation streams remain reserved.
 
+## Time-grid study
+
+```bash
+python -m bsde_pricing grid-study
+```
+
+The declared ten-asset arithmetic case uses 10, 20 and 40 intervals, both solvers and three development seeds, for 18 bounded fits. One independent terminal reference is shared across grids. The protected directory is `scratch/runs/arithmetic_10_grid_study`. Notebook sections 35-37 display every seed's price error, all initial coordinate errors, parameter counts, validation objectives and measured costs. The [time-grid results](docs/methodology.md#time-grid-development-study) distinguish exact forward transitions from the discrete control approximation and fixed-budget optimisation. Raw loss magnitudes across grids do not establish convergence.
+
 ## Experiment design
 
 ```bash

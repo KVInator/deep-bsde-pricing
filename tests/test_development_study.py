@@ -13,7 +13,7 @@ import numpy as np
 
 from bsde_pricing.arithmetic_pilot import _guarded_worker, _child_rss_mib, WorkerLimitError
 from bsde_pricing.basket_reference import BasketReferencePricer
-from bsde_pricing.development_study import ArithmeticDevelopmentStudy, profile_update_components
+from bsde_pricing.development_study import ArithmeticDevelopmentStudy, TimeGridStudy, profile_update_components
 from bsde_pricing.training import PathTrainingConfig
 from bsde_pricing.experiment_design import ExperimentDesign
 from bsde_pricing.problems import correlated_case
@@ -101,6 +101,55 @@ class DevelopmentStudyTests(unittest.TestCase):
             self.assertEqual(len(result["runs"]), 3)
             self.assertEqual(result["summary"]["value_gradient"]["compared_runs"], 0)
             self.assertTrue(all(t["status"] == "failed" for r in result["runs"] for t in r["tasks"].values()))
+
+    def test_grid_study_shares_reference_and_saves_grid_specific_models(self):
+        data = ExperimentDesign.load().data
+        data["training"].update(iterations=2, base_steps=2, batch_size=8, width=4,
+                                validation_paths=8, evaluation_paths=8, log_every=1)
+        data["development_seeds"] = [2026]
+        data["grid_steps"] = [1, 3]
+        data["reference"].update(sobol_powers=[6, 8], check_pairs=[256, 1024], scrambles=4,
+                                 pilot_pairs=64, chunk_terminal_states=64)
+        study = TimeGridStudy(ExperimentDesign(data))
+        with tempfile.TemporaryDirectory(dir="scratch/tests") as temp:
+            directory = Path(temp)/"grid"
+            with patch.object(study, "_reference", wraps=study._reference) as reference:
+                result = study.run(directory)
+            reference.assert_called_once()
+            self.assertEqual(result, json.loads((directory/"report.json").read_text()))
+            self.assertEqual(result["scheduled_fits"], 4)
+            self.assertEqual(result["specification_sha256"], study.design.sha256)
+            counts = {k: [] for k in data["solvers"]}
+            for grid in result["grids"]:
+                run = grid["runs"][0]
+                self.assertEqual(run["seed"], 2026)
+                run_dir = directory/grid["directory"]/run["directory"]
+                self.assertEqual(json.loads((run_dir/"reference.json").read_text()), result["reference"])
+                for kind in data["solvers"]:
+                    source = json.loads((run_dir/kind/"report.json").read_text())
+                    self.assertEqual(source["config"]["n_steps"], grid["n_steps"])
+                    self.assertEqual(source["completed_updates"], 2)
+                    self.assertTrue(np.isfinite(run["tasks"][kind]["selected_validation_objective"]))
+                    self.assertEqual(len(run["models"][kind]["scaled_delta_checks"]), 10)
+                    counts[kind].append(run["models"][kind]["parameter_count"])
+            self.assertEqual(counts["value_gradient"][0], counts["value_gradient"][1])
+            self.assertGreater(counts["terminal_loss"][1], counts["terminal_loss"][0])
+            with patch.object(study, "_reference") as reference, self.assertRaises(FileExistsError):
+                study.run(directory)
+            reference.assert_not_called()
+
+    def test_grid_failures_keep_every_planned_row(self):
+        data = ExperimentDesign.load().data
+        data["development_seeds"] = [2026]
+        data["grid_steps"] = [10, 20]
+        with tempfile.TemporaryDirectory(dir="scratch/tests") as temp, \
+             patch("bsde_pricing.arithmetic_pilot.ArithmeticPilot._run_worker", side_effect=WorkerLimitError("limit")):
+            result = TimeGridStudy(ExperimentDesign(data)).run(Path(temp)/"failed_grid")
+            self.assertEqual(result["status"], "incomplete")
+            self.assertFalse(result["reference_usable"])
+            self.assertEqual([g["n_steps"] for g in result["grids"]], [10, 20])
+            self.assertTrue(all(t["status"] == "failed" for g in result["grids"]
+                                for r in g["runs"] for t in r["tasks"].values()))
 
 
 if __name__ == "__main__":

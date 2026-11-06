@@ -75,9 +75,11 @@ class ArithmeticDevelopmentStudy:
         if self.case.contract.basket != "arithmetic" or self.case.model.dimension < 10:
             raise ValueError("Development study requires a declared multi-asset arithmetic case.")
 
-    def _config(self, seed, power, pairs):
+    def _config(self, seed, power, pairs, *, n_steps=None):
         common = dict(self.spec["training"])
         common["n_steps"] = common.pop("base_steps")
+        if n_steps is not None:
+            common["n_steps"] = n_steps
         common.pop("terminal_weight")
         common.pop("patience")
         common["seed"] = seed
@@ -107,10 +109,7 @@ class ArithmeticDevelopmentStudy:
             outcome["guard"] = json.loads(guard.read_text())
         return outcome
 
-    def run(self, directory: Path) -> dict:
-        directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=False)
-        started = time.perf_counter()
+    def _design(self):
         design = {"method": "arithmetic_development_study", "problem": json.loads(self.case.to_json()),
                   "specification_sha256": self.design.sha256, "specification": self.spec,
                   "seeds": self.spec["development_seeds"], "reference_seeds": [2032, 2033],
@@ -132,6 +131,13 @@ class ArithmeticDevelopmentStudy:
             "terminal_relative_variance": float(forward_weights@np.expm1(covariance*self.case.contract.maturity)@forward_weights),
             "correlation_min_eigenvalue": float(eigenvalues[0]), "correlation_max_eigenvalue": float(eigenvalues[-1]),
         }
+        return design
+
+    def run(self, directory: Path) -> dict:
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=False)
+        started = time.perf_counter()
+        design = self._design()
         _write_json(directory/"design.json", design)
         component_profile = None
         if self.case.model.dimension >= 50:
@@ -144,7 +150,24 @@ class ArithmeticDevelopmentStudy:
             component_profile = {"task": outcome}
             if outcome["status"] == "completed":
                 component_profile["timings"] = json.loads((diagnostic_dir/"components.json").read_text())
-        levels, runs = [], []
+        levels, reference, usable = self._reference(directory, design)
+        runs = []
+        for seed in self.spec["development_seeds"]:
+            row = self._run_seed(directory, design, seed, reference, usable)
+            runs.append(row)
+            report = {**design, "reference_levels": levels, "reference": reference,
+                      "component_profile": component_profile,
+                      "reference_usable": usable, "runs": runs, "wall_seconds": time.perf_counter()-started,
+                      "status": "completed" if len(runs) == len(self.spec["development_seeds"]) and usable and all(
+                          r.get("comparison_status") == "completed" and all(t["status"] == "completed" for t in r["tasks"].values())
+                          for r in runs) else "incomplete"}
+            report.update(controller_peak_resident_mib=_peak_rss_mib(), physical_memory_gib=_physical_memory_gib())
+            report["summary"] = self._summary(runs)
+            _write_json(directory/"report.json", report)
+        return report
+
+    def _reference(self, directory, design):
+        levels = []
         reference, usable = None, False
         base_seed = self.spec["development_seeds"][0]
         for index, (power, pairs) in enumerate(zip(self.spec["reference"]["sobol_powers"], self.spec["reference"]["check_pairs"])):
@@ -165,46 +188,42 @@ class ArithmeticDevelopmentStudy:
             levels.append(row)
             if usable or outcome["status"] != "completed":
                 break
-        for seed in self.spec["development_seeds"]:
-            run_dir = directory/f"seed_{seed}"
-            run_dir.mkdir()
-            config = self._config(seed, self.spec["reference"]["sobol_powers"][0], self.spec["reference"]["check_pairs"][0])
-            _write_json(run_dir/"design.json", {"problem": design["problem"], "config": asdict(config)})
-            runner = ArithmeticPilot(config)
-            row = {"seed": seed, "directory": run_dir.name, "tasks": {}}
-            for kind in ("value_gradient", "terminal_loss"):
-                outcome = self._task(runner, kind, run_dir, self.spec["resources"])
-                if outcome["status"] == "completed":
-                    source = json.loads((run_dir/kind/"report.json").read_text())
-                    outcome.update(status=source["status"], completed_updates=source["completed_updates"],
-                                   selected_step=source["selected_step"], training_seconds=source["training_seconds"],
-                                   evaluation_seconds=source["evaluation_seconds"])
-                row["tasks"][kind] = outcome
-            if reference is not None and all((run_dir/k/"model.pt").exists() and
-                    row["tasks"][k]["status"] in ("completed", "time_budget_reached") for k in row["tasks"]):
-                _write_json(run_dir/"reference.json", reference)
-                comparison = self._task(runner, "comparison", run_dir, self.spec["resources"])
-                row["comparison_status"] = comparison["status"]
-                if comparison["status"] == "completed":
-                    row["models"] = json.loads((run_dir/"comparison.json").read_text())
-                    for model in row["models"].values():
-                        if not usable:
-                            model["price_check"]["classification"] = "reference_inconclusive"
-                            for check in model["scaled_delta_checks"]:
-                                check["classification"] = "reference_inconclusive"
-                        model["directional_delta"] = float(sum(model["initial"]["delta"]))
-                        model["maximum_absolute_scaled_delta_error"] = float(max(abs(c["signed_error"]) for c in model["scaled_delta_checks"]))
-            runs.append(row)
-            report = {**design, "reference_levels": levels, "reference": reference,
-                      "component_profile": component_profile,
-                      "reference_usable": usable, "runs": runs, "wall_seconds": time.perf_counter()-started,
-                      "status": "completed" if len(runs) == len(self.spec["development_seeds"]) and usable and all(
-                          r.get("comparison_status") == "completed" and all(t["status"] == "completed" for t in r["tasks"].values())
-                          for r in runs) else "incomplete"}
-            report.update(controller_peak_resident_mib=_peak_rss_mib(), physical_memory_gib=_physical_memory_gib())
-            report["summary"] = self._summary(runs)
-            _write_json(directory/"report.json", report)
-        return report
+        return levels, reference, usable
+
+    def _run_seed(self, directory, design, seed, reference, usable, *, n_steps=None):
+        run_dir = directory/f"seed_{seed}"
+        run_dir.mkdir()
+        config = self._config(seed, self.spec["reference"]["sobol_powers"][0], self.spec["reference"]["check_pairs"][0], n_steps=n_steps)
+        _write_json(run_dir/"design.json", {"problem": design["problem"], "config": asdict(config)})
+        runner = ArithmeticPilot(config)
+        row = {"seed": seed, "directory": run_dir.name, "tasks": {}}
+        for kind in ("value_gradient", "terminal_loss"):
+            outcome = self._task(runner, kind, run_dir, self.spec["resources"])
+            if outcome["status"] == "completed":
+                source = json.loads((run_dir/kind/"report.json").read_text())
+                outcome.update(status=source["status"], completed_updates=source["completed_updates"],
+                               selected_step=source["selected_step"], training_seconds=source["training_seconds"],
+                               evaluation_seconds=source["evaluation_seconds"],
+                               selected_validation_objective=source[
+                                   "selected_validation_total" if kind == "value_gradient"
+                                   else "selected_validation_terminal"])
+            row["tasks"][kind] = outcome
+        if reference is not None and all((run_dir/k/"model.pt").exists() and
+                row["tasks"][k]["status"] in ("completed", "time_budget_reached") for k in row["tasks"]):
+            _write_json(run_dir/"reference.json", reference)
+            comparison = self._task(runner, "comparison", run_dir, self.spec["resources"])
+            row["comparison"] = comparison
+            row["comparison_status"] = comparison["status"]
+            if comparison["status"] == "completed":
+                row["models"] = json.loads((run_dir/"comparison.json").read_text())
+                for model in row["models"].values():
+                    if not usable:
+                        model["price_check"]["classification"] = "reference_inconclusive"
+                        for check in model["scaled_delta_checks"]:
+                            check["classification"] = "reference_inconclusive"
+                    model["directional_delta"] = float(sum(model["initial"]["delta"]))
+                    model["maximum_absolute_scaled_delta_error"] = float(max(abs(c["signed_error"]) for c in model["scaled_delta_checks"]))
+        return row
 
     @staticmethod
     def _summary(runs):
@@ -224,3 +243,51 @@ class ArithmeticDevelopmentStudy:
                                     "sample_standard_deviation": float(np.std(values, ddof=1)) if len(values) > 1 else None,
                                     "min": min(values) if values else None, "max": max(values) if values else None}
         return result
+
+
+class TimeGridStudy(ArithmeticDevelopmentStudy):
+    """Locked grid levels and development seeds, sharing one terminal reference.
+
+    Fixed optimiser updates do not isolate discretisation bias. Seed labels
+    repeat across grids, but Brownian paths are not coupled between resolutions.
+    """
+
+    def __init__(self, design: ExperimentDesign | None = None):
+        design = ExperimentDesign.load() if design is None else design
+        super().__init__(design.data["grid_case"], design)
+
+    def run(self, directory: Path) -> dict:
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=False)
+        started = time.perf_counter()
+        design = {**self._design(), "method": "time_grid_development_study",
+                  "grid_steps": sorted(self.spec["grid_steps"]),
+                  "scope": "fixed-budget development grid study; no coupled cross-grid paths; final streams reserved"}
+        _write_json(directory/"design.json", design)
+        levels, reference, usable = self._reference(directory, design)
+        grids = []
+        for n_steps in design["grid_steps"]:
+            grid_dir = directory/f"steps_{n_steps}"
+            grid_dir.mkdir()
+            grid_started = time.perf_counter()
+            grid = {"n_steps": n_steps, "time_step": self.case.contract.maturity/n_steps,
+                    "directory": grid_dir.name, "runs": []}
+            grids.append(grid)
+            for seed in self.spec["development_seeds"]:
+                grid["runs"].append(self._run_seed(grid_dir, design, seed, reference, usable, n_steps=n_steps))
+                grid["summary"] = self._summary(grid["runs"])
+                grid["wall_seconds"] = time.perf_counter()-grid_started
+                grid["status"] = "completed" if usable and len(grid["runs"]) == len(self.spec["development_seeds"]) and all(
+                    r.get("comparison_status") == "completed" and all(t["status"] == "completed" for t in r["tasks"].values())
+                    for r in grid["runs"]) else "incomplete"
+                report = {**design, "reference_levels": levels, "reference": reference,
+                          "reference_usable": usable, "grids": grids,
+                          "scheduled_fits": len(design["grid_steps"])*len(self.spec["development_seeds"])*2,
+                          "summary": {str(g["n_steps"]): g["summary"] for g in grids},
+                          "wall_seconds": time.perf_counter()-started,
+                          "controller_peak_resident_mib": _peak_rss_mib(),
+                          "physical_memory_gib": _physical_memory_gib(),
+                          "status": "completed" if len(grids) == len(design["grid_steps"]) and all(
+                              g["status"] == "completed" for g in grids) else "incomplete"}
+                _write_json(directory/"report.json", report)
+        return report
