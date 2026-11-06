@@ -117,6 +117,16 @@ python -m bsde_pricing grid-study
 
 The declared ten-asset arithmetic case uses 10, 20 and 40 intervals, both solvers and three development seeds, for 18 bounded fits. One independent terminal reference is shared across grids. The protected directory is `scratch/runs/arithmetic_10_grid_study`. Notebook sections 35-37 display every seed's price error, all initial coordinate errors, parameter counts, validation objectives and measured costs. The [time-grid results](docs/methodology.md#time-grid-development-study) distinguish exact forward transitions from the discrete control approximation and fixed-budget optimisation. Raw loss magnitudes across grids do not establish convergence.
 
+## Greek stress study
+
+```bash
+python -m bsde_pricing stress-study
+```
+
+The four declared arithmetic-ten stresses use strikes 90 and 110, maturity 0.25 years, or correlation 0.80. Both solvers run at three development seeds with the locked base grid and training budget, giving 24 fits. The study retains initial price/coordinate errors, covariance-aware directional deltas, selected value-gradient curvature secants and resource outcomes. Existing asymmetric five-asset geometric checkpoints supply analytical initial-curvature and path-delta checks without retraining. Their default directories are `scratch/runs/geometric_five_fbsnn` and `scratch/runs/geometric_five_terminal_bsde`.
+
+Outputs are protected under `scratch/runs/greek_stress_study`; notebook sections 38-41 read this report. Arithmetic curvature intervals describe finite-bump sampling uncertainty and exclude bump bias. Terminal initial-price curvature remains unavailable. The [Greek stress methodology](docs/methodology.md#greek-reliability-under-financial-stresses) defines the directions, references and limitations.
+
 ## Experiment design
 
 ```bash

@@ -221,6 +221,10 @@ def _worker(kind: str, directory: Path) -> None:
         from .training import PathTrainingConfig
 
         _write_json(directory/"components.json", profile_update_components(case, PathTrainingConfig(**config["training"])))
+    elif kind == "greeks":
+        from .greek_study import GreekDiagnostics
+
+        _write_json(directory/"greeks.json", GreekDiagnostics(case).run(directory, design["greek_options"]))
     elif kind == "comparison":
         from .training import PathTrainingConfig
 
@@ -386,7 +390,7 @@ class ArithmeticPilot:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Internal isolated arithmetic-pilot worker")
-    parser.add_argument("--worker", required=True, choices=("reference", "value_gradient", "terminal_loss", "comparison", "diagnostic"))
+    parser.add_argument("--worker", required=True, choices=("reference", "value_gradient", "terminal_loss", "comparison", "diagnostic", "greeks"))
     parser.add_argument("--run-dir", required=True, type=Path)
     arguments = parser.parse_args()
     _worker(arguments.worker, arguments.run_dir)

@@ -66,6 +66,19 @@ class GeometricBasketReference:
         with np.errstate(over="raise", invalid="raise", divide="raise"):
             return (basket_delta*basket)[..., None]*np.asarray(self.contract.weights)/spots
 
+    def call_hessian(self, spots: ArrayLike, time: float = 0.0) -> NDArray[np.float64]:
+        """Physical spot Hessian, including the geometric basket's own curvature."""
+        result = self.evaluate(spots, time)
+        if result.time_to_maturity <= 0 or result.effective_volatility <= 0:
+            raise ValueError("The Hessian requires positive remaining variance.")
+        scalar = self._scalar_reference.evaluate(result.geometric_spot, time)
+        spots = np.asarray(result.spots)
+        weights = np.asarray(self.contract.weights)
+        chain = weights/spots
+        first = scalar.call_delta*result.geometric_spot
+        second = scalar.gamma*result.geometric_spot**2
+        return (first+second)*np.outer(chain, chain)-np.diag(first*weights/spots**2)
+
     def evaluate(self, spots: ArrayLike, time: float = 0.0) -> GeometricBasketResult:
         spots = _finite_vector(spots, "spots")
         if len(spots) != self.model.dimension or any(s <= 0 for s in spots):

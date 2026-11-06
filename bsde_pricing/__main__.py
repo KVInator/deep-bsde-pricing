@@ -247,6 +247,10 @@ def main() -> None:
     development.add_argument("--run-dir", type=Path)
     grid_study = commands.add_parser("grid-study", help="compare the locked time grids at development seeds")
     grid_study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/arithmetic_10_grid_study"))
+    stress_study = commands.add_parser("stress-study", help="run the declared financial stresses and Greek diagnostics")
+    stress_study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/greek_stress_study"))
+    stress_study.add_argument("--geometric-value", type=Path, default=Path("scratch/runs/geometric_five_fbsnn"))
+    stress_study.add_argument("--geometric-terminal", type=Path, default=Path("scratch/runs/geometric_five_terminal_bsde"))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss, design):
         command.add_argument(
@@ -255,6 +259,22 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "stress-study":
+            from .greek_study import GreekStressStudy
+
+            result = GreekStressStudy().run(args.run_dir, geometric_value=args.geometric_value,
+                                            geometric_terminal=args.geometric_terminal)
+            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
+                              "specification_sha256": result["specification_sha256"],
+                              "scheduled_fits": result["scheduled_fits"], "wall_seconds": result["wall_seconds"],
+                              "cases": [{"case": c["case"], "status": c["study"]["status"],
+                                         "reference_usable": c["study"]["reference_usable"],
+                                         "summary": c["study"]["summary"], "greeks_status": c["greeks"]["status"]}
+                                        for c in result["cases"]], "asymmetric_status": result["asymmetric"]["status"]},
+                             indent=2, sort_keys=True, allow_nan=False))
+            if result["status"] != "completed":
+                parser.exit(1, "Greek stress study incomplete; inspect retained task and reference records.\n")
+            return
         if args.command in ("development-study", "grid-study"):
             from .development_study import ArithmeticDevelopmentStudy, TimeGridStudy
 

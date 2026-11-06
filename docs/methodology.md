@@ -2053,3 +2053,150 @@ The result remains mixed under refinement: three fits meet the price target and 
 Total local study wall time is 360.4678 seconds. Largest training-worker peak is 450.41 MiB, reference peak 118.58 MiB and controller peak separately 213.81 MiB on the 8 GiB ARM64 MacBook. The runtime is Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 on macOS 27.0.1, using CPU float64. These measurements describe this workload and do not establish a matched-precision hardware speedup.
 
 The notebook has unchanged source, 39 consecutively executed code cells and 31 complete figures, with no saved errors or stderr. The first 28 figures are byte-identical to the previously reviewed outputs. The three new figures render fully; all eight new tables agree with the complete MacBook report, and every shared CLI summary field matches that report. Execution counts run from 118 to 156, so the saved file confirms consecutive execution rather than a kernel restart. No blocking discrepancy was found. This closes the time-grid study; selected Greek stresses remain a separate experiment.
+
+## Greek reliability under financial stresses
+
+### Cases, directions and accuracy units
+
+The development study runs the four financial stresses declared in the unchanged experiment specification: ten-asset arithmetic calls with strike 90, strike 110, maturity 0.25 years, or equicorrelation 0.80. Each case changes only that input from the synthetic base. Both solvers use seeds 2026-2028, 16 intervals, width 16, batch 128 and 3,000 Adam updates with validation-only checkpoint selection. There are 24 new fits and no additional tuning. Final streams remain reserved.
+
+`GreekStressStudy` composes the existing bounded arithmetic development runner rather than implementing another training or reference engine. Each financial case has its own reference allocation, fit checkpoints, independent comparisons and guarded Greek diagnostic worker. The reference checks, 0.01 price target and 0.01 target for each delta divided by its basket weight are unchanged. Failures, time caps and insufficient reference precision remain in the reports. This selected case matrix does not estimate every interaction or a matched three-seed stress effect against a new baseline.
+
+For a physical spot direction $v$, define
+
+\[
+D_vu(s)=v^\top\Delta(s),\qquad
+\Gamma_v(s)=v^\top H_u(s)v.
+\]
+
+The directions are a parallel one-unit spot shift, $v=(1,\ldots,1)$, and the first smallest-weight coordinate, $v=e_j$. Ties use the first coordinate. The directional delta target is $0.01\sum_iw_i|v_i|$, the aggregate error bound implied by satisfying every scaled coordinate target. Its success does not imply coordinate accuracy, because errors can cancel. The numerical directional reference projects each complete scramble-level delta vector before estimating its standard error, retaining covariance between coordinates.
+
+The existing diffusion inversion diagnostics report condition numbers, inverse norms and reconstruction residuals. For equal spots and volatilities, the initial diffusion condition number is the square root of the correlation condition number: about 2.299 for the base equicorrelation and 6.403 for correlation 0.80. A small reconstruction residual verifies linear algebra, not the economic accuracy of the recovered delta. The high-correlation stress is positive definite and does not approach the singular limit.
+
+### Finite-bump arithmetic curvature
+
+The value-gradient model supplies its physical spot Hessian by automatic differentiation. Its own central delta bumps check the network's derivatives only. The independent reference uses
+
+\[
+\Gamma_v^{(h)}(s)=\frac{v^\top\Delta(s+hv)-v^\top\Delta(s-hv)}{2h},
+\qquad h\in\{1,0.5,0.1\}.
+\]
+
+Bumps are in currency units, not fractions of spot. Each sign uses the existing scrambled-Sobol pathwise-delta reference and a geometric control fitted on a separate pilot. A dedicated development seed 2035 reuses the same pilot and scramble random numbers across signs and bumps; these samples are independent of fitting, selection and the unbumped numerical reference. With paired scramble estimates $G_b^+$ and $G_b^-$, uncertainty is estimated across
+
+\[
+Q_b(h)=\frac{v^\top(G_b^+-G_b^-)}{2h},\qquad
+\widehat{\mathrm{SE}}=s_Q/\sqrt{B},\qquad B=16.
+\]
+
+The retained pointwise 95% interval uses a Student t critical value with $B-1$ degrees of freedom. The diagnostic allocation is the first declared reference power, $2^{16}$ per scramble, with 4,096 independent pilot pairs and chunked terminal evaluation. It is fixed before running the stresses and is not increased to manufacture curvature agreement. All replicate secants are retained.
+
+Under sufficient smoothness a central secant has a second-order bump bias, but the confidence interval measures only sampling uncertainty around that secant. Payoff kinks make naive second automatic differentiation of pathwise indicators invalid and can increase small-bump sampling noise. The report therefore retains all three bump sizes without declaring the smallest one exact, inferring an error order from noisy points or selecting a favourable bump. No numerical curvature accuracy target is introduced. The two directional checks are not a full Hessian validation.
+
+The terminal-loss model learns a fixed-start initial price and control. It does not define a global initial value map whose spot Hessian could be differentiated. Its initial curvature remains unavailable; differentiating a later control network or retraining after a spot bump is not substituted for that quantity.
+
+### Asymmetric analytical check
+
+The saved five-asset geometric fits are re-evaluated without retraining. Their unequal spots, weights, volatilities, dividend yields and mixed-sign correlations give an analytical check beyond equal-coordinate arithmetic cases. This is the existing seed-2026 experiment, not a new three-seed asymmetric study. Missing checkpoints are retained as unavailable; the `--geometric-value` and `--geometric-terminal` options identify alternate existing run directories.
+
+For $G(s)=\prod_i s_i^{w_i}$ and scalar geometric-basket price $C(G)$, let $a_i=w_i/s_i$. The independent physical Hessian is
+
+\[
+H_u=(C''(G)G^2+C'(G)G)aa^\top
+-C'(G)G\operatorname{diag}(w_i/s_i^2).
+\]
+
+The second term is the curvature of the geometric basket itself. Omitting it produces incorrect diagonal sensitivities. `GeometricBasketReference.call_hessian` implements this chain rule; analytical PyTorch derivatives and coordinate delta finite differences independently check it. The geometric Hessian need not be positive semidefinite even though the call is convex in its scalar basket argument.
+
+The report retains initial directional errors, all five weight-scaled coordinate errors, exact selected curvatures, analytical path-delta errors on 2,048 common paths and diffusion diagnostics. Numerical arithmetic conditional path references remain unavailable. Asymmetric initial errors use the locked scaled target for inspection; the earlier pilot's separate targets are preserved in its original results.
+
+### Development results
+
+The workspace status is `completed`. Every scheduled fit, independent comparison and Greek task is retained. The following counts use uncertainty-aware classifications at the original price and scaled-delta targets.
+
+| Case | Model | Price targets met | All coordinate targets met | Initial bound violations |
+| --- | --- | ---: | ---: | ---: |
+| arithmetic-10-strike-90 | value gradient | 0 / 3 | 0 / 3 | 0 |
+| arithmetic-10-strike-90 | terminal loss | 2 / 3 | 0 / 3 | 0 |
+| arithmetic-10-strike-110 | value gradient | 0 / 3 | 0 / 3 | 0 |
+| arithmetic-10-strike-110 | terminal loss | 1 / 3 | 0 / 3 | 0 |
+| arithmetic-10-short | value gradient | 0 / 3 | 0 / 3 | 0 |
+| arithmetic-10-short | terminal loss | 1 / 3 | 0 / 3 | 0 |
+| arithmetic-10-correlation-80 | value gradient | 0 / 3 | 0 / 3 | 0 |
+| arithmetic-10-correlation-80 | terminal loss | 0 / 3 | 0 / 3 | 0 |
+
+| Case | Seed | Model | Price error | Worst scaled-delta error |
+| --- | ---: | --- | ---: | ---: |
+| arithmetic-10-strike-90 | 2026 | terminal loss | -0.00270512 | 0.07321667 |
+| arithmetic-10-strike-90 | 2026 | value gradient | +0.02576634 | 0.12307934 |
+| arithmetic-10-strike-90 | 2027 | terminal loss | -0.01821904 | 0.06880743 |
+| arithmetic-10-strike-90 | 2027 | value gradient | -0.05203049 | 0.12464218 |
+| arithmetic-10-strike-90 | 2028 | terminal loss | -0.00302530 | 0.07802348 |
+| arithmetic-10-strike-90 | 2028 | value gradient | -0.02930104 | 0.13245231 |
+| arithmetic-10-strike-110 | 2026 | terminal loss | -0.00861621 | 0.09066941 |
+| arithmetic-10-strike-110 | 2026 | value gradient | +0.11562407 | 0.09247670 |
+| arithmetic-10-strike-110 | 2027 | terminal loss | -0.01907133 | 0.07211848 |
+| arithmetic-10-strike-110 | 2027 | value gradient | -0.08290783 | 0.11807794 |
+| arithmetic-10-strike-110 | 2028 | terminal loss | +0.02140591 | 0.10522855 |
+| arithmetic-10-strike-110 | 2028 | value gradient | +0.05349310 | 0.15804122 |
+| arithmetic-10-short | 2026 | terminal loss | +0.01369467 | 0.05206036 |
+| arithmetic-10-short | 2026 | value gradient | +0.04880445 | 0.10656044 |
+| arithmetic-10-short | 2027 | terminal loss | -0.00890862 | 0.08439785 |
+| arithmetic-10-short | 2027 | value gradient | +0.03081679 | 0.07141047 |
+| arithmetic-10-short | 2028 | terminal loss | +0.02149660 | 0.13952122 |
+| arithmetic-10-short | 2028 | value gradient | +0.04043553 | 0.11582553 |
+| arithmetic-10-correlation-80 | 2026 | terminal loss | -0.01143159 | 0.22178618 |
+| arithmetic-10-correlation-80 | 2026 | value gradient | -0.14724337 | 0.23604537 |
+| arithmetic-10-correlation-80 | 2027 | terminal loss | +0.01735805 | 0.07780798 |
+| arithmetic-10-correlation-80 | 2027 | value gradient | +0.09301205 | 0.11332498 |
+| arithmetic-10-correlation-80 | 2028 | terminal loss | -0.03414042 | 0.29615627 |
+| arithmetic-10-correlation-80 | 2028 | value gradient | +0.10589043 | 0.20655910 |
+
+Across all four stresses, terminal loss meets the price target at four of twelve fits; value-gradient meets it at none. No fit meets every coordinate-delta target. All 240 initial coordinate deltas satisfy their financial bounds. The high-correlation case has worst scaled-coordinate errors as large as 0.2962 for terminal loss and 0.2360 for value-gradient. Parallel directional targets are met at ten of twelve terminal fits but only two value-gradient fits, showing how aggregate accuracy can conceal coordinate failures. These are fixed-budget outcomes without a new optimisation search.
+
+The independent numerical references pass precision and method-agreement checks for every case. Each case retains its allocation ladder and pointwise coordinate intervals; these are not simultaneous confidence bands. Full coordinate estimates, directional projections and diffusion diagnostics remain in the report and notebook.
+
+| Case | Direction | Reference secants at h=1, 0.5, 0.1 | Reference SEs in the same order | Network gamma range across seeds |
+| --- | --- | --- | --- | --- |
+| arithmetic-10-strike-90 | coordinate_1 | 0.0001709753, 0.0001716604, 0.0001657572 | 3.3e-06, 4.91e-06, 8.27e-06 | 4.701814e-06 to 0.0001144232 |
+| arithmetic-10-strike-90 | parallel | 0.01647799, 0.01653597, 0.01662418 | 7.22e-05, 0.000123, 0.000358 | -0.002120764 to 0.001431223 |
+| arithmetic-10-strike-110 | coordinate_1 | 0.0002960065, 0.0002991239, 0.0003063376 | 5.25e-06, 8.07e-06, 1.79e-05 | 6.387275e-05 to 0.0001783012 |
+| arithmetic-10-strike-110 | parallel | 0.02925254, 0.0292691, 0.02910486 | 0.000133, 0.000246, 0.00059 | -0.00296324 to 0.002474225 |
+| arithmetic-10-short | coordinate_1 | 0.0006450617, 0.0006463413, 0.000646567 | 8.35e-06, 1.25e-05, 1.94e-05 | 0.000230802 to 0.0007349758 |
+| arithmetic-10-short | parallel | 0.06459359, 0.06486967, 0.06407333 | 9.93e-05, 0.000348, 0.00077 | 0.008542256 to 0.03919427 |
+| arithmetic-10-correlation-80 | coordinate_1 | 0.0002158442, 0.0002089452, 0.0002128266 | 3.83e-06, 6.25e-06, 1.56e-05 | -3.720122e-05 to 7.272452e-05 |
+| arithmetic-10-correlation-80 | parallel | 0.0212521, 0.02149687, 0.02139326 | 5e-05, 0.000114, 0.000367 | -0.003634808 to 0.00095238 |
+
+All twelve learned parallel curvatures are below the corresponding arithmetic finite-bump references at every retained bump. Several have the wrong sign. The short-maturity reference is about 0.064-0.065, while the three learned values range from 0.00854 to 0.03919. In the asymmetric analytical case, the parallel gamma is -0.00503716 against +0.02689721. Agreement between network Hessians and their own delta bumps does not remove these independent model errors.
+
+Finite-bump arithmetic references and network Hessians measure different quantities when bump bias is material. The retained signed-error intervals compare each Hessian with each finite-bump secant; no gamma pass count or preferred bump is inferred.
+
+| Asymmetric model | Price error | Weight-scaled coordinate errors | Path delta RMSE |
+| --- | ---: | --- | ---: |
+| terminal loss | +0.03089642 | +0.086214, +0.032183, +0.011143, +0.007683, -0.005770 | 0.02524980 |
+| value gradient | +0.27464292 | +0.010383, -0.062807, -0.108720, -0.022393, +0.006106 | 0.02791369 |
+
+| Asymmetric direction | Network gamma | Exact gamma | Signed gamma error |
+| --- | ---: | ---: | ---: |
+| coordinate_1 | -0.00006851 | -0.00023401 | +0.00016550 |
+| parallel | -0.00503716 | 0.02689721 | -0.03193437 |
+
+| Case | Model | Fitting seconds, min-max | Training peak MiB, max |
+| --- | --- | --- | ---: |
+| arithmetic-10-strike-90 | value gradient | 15.6638-16.5501 | 366.72 |
+| arithmetic-10-strike-90 | terminal loss | 24.9176-25.9944 | 329.49 |
+| arithmetic-10-strike-110 | value gradient | 15.4479-16.4318 | 366.78 |
+| arithmetic-10-strike-110 | terminal loss | 23.0315-24.6439 | 329.20 |
+| arithmetic-10-short | value gradient | 15.8119-16.3101 | 366.75 |
+| arithmetic-10-short | terminal loss | 23.2758-25.8486 | 329.36 |
+| arithmetic-10-correlation-80 | value gradient | 15.7814-15.9621 | 366.82 |
+| arithmetic-10-correlation-80 | terminal loss | 24.3976-25.1567 | 329.35 |
+
+Total workspace wall time is 628.3312 seconds and controller peak is separately 267.69 MiB. The runtime uses Linux x86-64, Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu with CPU float64 and one thread. Training, reference and diagnostic guards have separate process-lifetime peaks and costs. These timings describe this workload, not a matched-precision hardware comparison.
+
+```bash
+python -W error::UserWarning -m unittest discover -s tests -v
+python -m bsde_pricing stress-study
+```
+
+All 106 tests pass with UserWarnings treated as errors, including an actual reduced stress study through guarded workers, exact geometric curvature, independent coordinate bumps, scalar analytical curvature limits, covariance-aware projections, existing-directory protection and retained failures. Full fresh-IPython execution completes 43 code cells and 34 figures without errors or stderr; the three appended figures render fully. The published notebook preserves all 82 earlier MacBook source/output cells. The repository audit reports no errors and three reviewed curated-notebook notices. MacBook stress-study execution and review of its pushed notebook remain pending.
