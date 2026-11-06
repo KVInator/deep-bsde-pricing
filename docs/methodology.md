@@ -1860,3 +1860,60 @@ Total local study wall time is 146.0971 seconds. The largest training-worker pea
 Path sampling is again the largest single median component for both fresh diagnostic models. These short component measurements retain the workload and interpretation limits stated above. They do not profile the whole fit or establish a general hardware speed comparison.
 
 The [executed notebook at 639b693](https://github.com/KVInator/deep-bsde-pricing/commit/639b693ff3a884c0f908bdc4facf54d2ada28a06) has unchanged source, 33 sequential executed code cells and 25 complete figures, with no recorded errors or stderr. The first 22 figures are byte-identical to the previously reviewed notebook. The three new figures and eight tables agree with the supplied report, whose summary also matches the terminal output. Milestone 21 is complete. The next step is the bounded 100-asset attempt under the existing experiment specification and resource rules.
+
+## Hundred-asset arithmetic development
+
+The last planned dimension uses 100 assets, weights 0.01, initial spots and strike 100, maturity one year, rate 0.03, volatility 0.20, zero dividends and pairwise correlation 0.30. The same three development seeds, two solvers and locked training settings apply. The CLI exposes the existing runner without a new architecture or dimension-specific tuning. Final evaluation streams remain reserved.
+
+### Dimension and financial scaling
+
+For equal initial spots, volatilities and weights, the instantaneous relative basket variance is $\sigma^2[\rho+(1-\rho)/d]$. At 100 assets it is 0.01228, versus 0.01256 at 50 assets and 0.01312 at 25. Its limit is $\sigma^2\rho=0.012$. Diversification changes alongside nominal dimension, and the common Brownian component persists. Correlation eigenvalues are 0.70 and 30.70. Completing this case would not establish dimension-independent convergence or performance on arbitrary high-dimensional claims.
+
+Training states have shape (128,17,100) and independent increments (128,16,100). Width 16, 16 intervals, batch 128 and 3,000 updates remain fixed. Value-gradient has 1,921 parameters and terminal loss 53,921. Reference sampling remains chunked at 4,096 terminal states; worker time and resident-memory guards retain all failures.
+
+### Reference and retained runs
+
+Study execution status is `completed` and reference usable is `True`. The specification fingerprint remains `bb1fa7f593af65920e988f11a0fd64082e5aa40abd7ebcbcc22ea5fe2f532a30`. The report retains all source digests, source checkpoint hashes, reference allocations, coordinate intervals and task guards.
+
+The primary reference price is 5.98953447, with pointwise 95% half-width 0.00060710. Maximum weight-scaled delta half-width is 0.00045728. Precision and independent-method agreement are screened before classifying neural errors. These are pointwise uncertainty intervals, without simultaneous coverage across all coordinates.
+
+| Seed | Model | Execution | Selected / completed update | Price error | Price classification | Maximum absolute scaled delta error | Initial bound violations |
+| --- | --- | --- | ---: | ---: | --- | ---: | ---: |
+| 2026 | terminal loss | completed | 2700 / 3000 | +0.03691709 | outside_target | 2.07386390 | 49 |
+| 2026 | value-gradient | completed | 2900 / 3000 | +0.01194313 | outside_target | 0.23635675 | 0 |
+| 2027 | terminal loss | completed | 3000 / 3000 | +0.00303216 | within_target | 1.50251103 | 48 |
+| 2027 | value-gradient | completed | 2600 / 3000 | +0.02194924 | outside_target | 0.55098605 | 1 |
+| 2028 | terminal loss | completed | 2800 / 3000 | +0.04197627 | outside_target | 1.70851114 | 36 |
+| 2028 | value-gradient | completed | 2900 / 3000 | +0.01542993 | outside_target | 0.41824767 | 1 |
+
+Value-gradient misses the price target at all three seeds. Terminal loss meets it at seed 2027 and misses at the other two. Neither formulation meets every coordinate-delta target at any seed. Terminal initial bound violations number 49, 48 and 36; value-gradient has 0, 1 and 1. The completed execution therefore retains substantial risk failures.
+
+
+Each delta error is divided by its 0.01 weight before comparison with the unchanged 0.01 target. Price accuracy, all-coordinate risk accuracy and financial bounds remain distinct checks. Conditional arithmetic path-risk references remain unavailable; no path-risk RMSE or comparable global terminal-model gamma is inferred.
+
+### Resource observations and reproduction
+
+| Seed | Model | Fit seconds | Worker wall seconds | Worker peak MiB |
+| --- | --- | ---: | ---: | ---: |
+| 2026 | terminal loss | 89.6518 | 93.5815 | 470.39 |
+| 2026 | value-gradient | 91.6794 | 96.3739 | 616.76 |
+| 2027 | terminal loss | 93.2073 | 97.0779 | 471.64 |
+| 2027 | value-gradient | 96.5029 | 101.5528 | 588.49 |
+| 2028 | terminal loss | 83.5591 | 87.4206 | 472.23 |
+| 2028 | value-gradient | 91.7112 | 96.2058 | 613.69 |
+
+Total workspace wall time is 590.2597 seconds, with controller peak separately 236.72 MiB. Runtime and every worker outcome are retained. The diagnostic and initial work overlapped the regression check in this shared workspace; these costs are observations, not a matched hardware comparison.
+
+| Model | Sampling ms | Objective forward ms | Backward ms | Adam ms | Largest median component |
+| --- | ---: | ---: | ---: | ---: | --- |
+| terminal loss | 14.4146 | 5.5738 | 3.5683 | 2.5274 | sample_paths |
+| value-gradient | 16.2585 | 9.7391 | 5.4550 | 0.5055 | sample_paths |
+
+Component timings use fresh models, two warmups and seven updates. They neither select saved checkpoints nor measure whole-training composition.
+
+```bash
+python -m bsde_pricing development-study --case arithmetic-100
+python -m unittest discover -s tests -v
+```
+
+Results are protected under `scratch/runs/arithmetic_100_development`. All 99 tests pass with user warnings treated as errors, including a reduced-budget 100-asset study through real workers, saved checkpoints, comparison and overwrite protection. Notebook sections 32-34 load the saved results, compare all development seeds across 25, 50 and 100 assets, show all 100 coordinate errors and retain task costs and component timings. Earlier MacBook notebook cells remain unchanged. MacBook execution and pushed-output review remain pending.

@@ -79,16 +79,17 @@ class DevelopmentStudyTests(unittest.TestCase):
                                  pilot_pairs=64, chunk_terminal_states=64)
         with tempfile.TemporaryDirectory(dir="scratch/tests") as temp:
             directory = Path(temp)/"study"
-            result = ArithmeticDevelopmentStudy(design=ExperimentDesign(data)).run(directory)
+            result = ArithmeticDevelopmentStudy("arithmetic-100", design=ExperimentDesign(data)).run(directory)
             self.assertEqual([r["seed"] for r in result["runs"]], [2026, 2027])
             self.assertEqual(result, json.loads((directory/"report.json").read_text()))
             for row in result["runs"]:
                 self.assertEqual(set(row["models"]), {"value_gradient", "terminal_loss"})
-                self.assertEqual(len(row["models"]["terminal_loss"]["initial"]["delta"]), 25)
+                self.assertEqual(len(row["models"]["terminal_loss"]["initial"]["delta"]), 100)
+                self.assertEqual(len(row["models"]["value_gradient"]["scaled_delta_checks"]), 100)
                 self.assertEqual(row["tasks"]["value_gradient"]["completed_updates"], 2)
             with patch("bsde_pricing.arithmetic_pilot.ArithmeticPilot._run_worker") as run:
                 with self.assertRaises(FileExistsError):
-                    ArithmeticDevelopmentStudy(design=ExperimentDesign(data)).run(directory)
+                    ArithmeticDevelopmentStudy("arithmetic-100", design=ExperimentDesign(data)).run(directory)
                 run.assert_not_called()
 
     def test_failed_tasks_remain_in_study(self):

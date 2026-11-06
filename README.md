@@ -101,6 +101,14 @@ python -m bsde_pricing development-study --case arithmetic-50
 
 The 50-asset case uses the same runner, locked training settings, three development seeds and resource limits. Its protected directory is `scratch/runs/arithmetic_50_development`. A separate diagnostic measures path sampling, loss evaluation, backward differentiation and the Adam step using fresh models. It supplies no accuracy results or checkpoint choice. The [fifty-asset results](docs/methodology.md#fifty-asset-arithmetic-development) retain every run and measured component. Notebook sections 29-31 compare both dimensions, display all fifty coordinate errors and show the cost breakdown.
 
+## Hundred-asset development
+
+```bash
+python -m bsde_pricing development-study --case arithmetic-100
+```
+
+The final planned dimension uses the existing bounded runner and unchanged training settings, seeds, reference checks and process limits. Results are protected under `scratch/runs/arithmetic_100_development`. Notebook sections 32-34 compare the 25-, 50- and 100-asset cases, display every initial coordinate error and retain all task outcomes and measured costs. The [hundred-asset results](docs/methodology.md#hundred-asset-arithmetic-development) distinguish nominal dimension, diversification, numerical accuracy and computational feasibility. Final evaluation streams remain reserved.
+
 ## Experiment design
 
 ```bash

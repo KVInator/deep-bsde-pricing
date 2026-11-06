@@ -243,7 +243,7 @@ def main() -> None:
     design = commands.add_parser("experiment-design", help="validate the specification and export reserved jobs without running them")
     design.add_argument("--spec", type=Path)
     development = commands.add_parser("development-study", help="run the bounded arithmetic development case with three seeds")
-    development.add_argument("--case", choices=("arithmetic-25", "arithmetic-50"), default="arithmetic-25")
+    development.add_argument("--case", choices=("arithmetic-25", "arithmetic-50", "arithmetic-100"), default="arithmetic-25")
     development.add_argument("--run-dir", type=Path)
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss, design):
