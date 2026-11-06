@@ -2033,4 +2033,23 @@ python -m bsde_pricing grid-study
 python -m unittest discover -s tests -v
 ```
 
-Outputs are protected under `scratch/runs/arithmetic_10_grid_study`. All 101 tests pass with user warnings treated as errors, including shared-reference reuse, real reduced-grid fits, grid-specific checkpoint configurations, parameter-count behaviour, existing-directory protection and retained failures. Existing dimension-study checks also pass after extraction of the shared operations. The neural notebook executes 39 code cells and renders 31 figures; sections 35-37 add every seed's independent error, all coordinate errors, costs, parameter counts and validation objectives. Earlier MacBook cells are preserved. MacBook execution and pushed notebook review remain pending.
+Outputs are protected under `scratch/runs/arithmetic_10_grid_study`. All 101 tests pass with user warnings treated as errors, including shared-reference reuse, real reduced-grid fits, grid-specific checkpoint configurations, parameter-count behaviour, existing-directory protection and retained failures. Existing dimension-study checks also pass after extraction of the shared operations. The neural notebook executes 39 code cells and renders 31 figures; sections 35-37 add every seed's independent error, all coordinate errors, costs, parameter counts and validation objectives. Earlier MacBook cells are preserved. Subsequent MacBook verification is recorded below.
+
+### MacBook verification
+
+The MacBook terminal output, complete report and [executed notebook at a936e9b](https://github.com/KVInator/deep-bsde-pricing/commit/a936e9b120154850f5932fd411cd721a5193f6e8) were reviewed on 6 November 2026. All 101 tests pass in 28.586 seconds with UserWarnings treated as errors. All 18 fits complete 3,000 updates, all worker guards pass and selected checkpoints match the workspace. Package source digests and the experiment fingerprint are unchanged. Maximum cross-platform differences in price errors and weight-scaled coordinate-delta errors are 7.11e-15 and 1.67e-15 respectively. Reference precision and independent-method agreement pass at the first allocation.
+
+The result remains mixed under refinement: three fits meet the price target and none meets all coordinate-delta targets. Terminal loss's worst-coordinate error improves from 10 to 20 intervals at every seed, then worsens at 40; value-gradient's worst-coordinate errors are larger at 40 than at 10. All initial delta bounds pass. The study establishes neither a convergence rate nor consistent accuracy gains at this fixed budget.
+
+| Intervals | Model | MacBook fit seconds, min-max |
+| ---: | --- | --- |
+| 10 | Value-gradient | 7.1455-7.5820 |
+| 10 | Terminal loss | 10.6380-11.5457 |
+| 20 | Value-gradient | 10.3720-12.3290 |
+| 20 | Terminal loss | 18.9217-19.0992 |
+| 40 | Value-gradient | 18.1057-18.4409 |
+| 40 | Terminal loss | 36.3422-38.8411 |
+
+Total local study wall time is 360.4678 seconds. Largest training-worker peak is 450.41 MiB, reference peak 118.58 MiB and controller peak separately 213.81 MiB on the 8 GiB ARM64 MacBook. The runtime is Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 on macOS 27.0.1, using CPU float64. These measurements describe this workload and do not establish a matched-precision hardware speedup.
+
+The notebook has unchanged source, 39 consecutively executed code cells and 31 complete figures, with no saved errors or stderr. The first 28 figures are byte-identical to the previously reviewed outputs. The three new figures render fully; all eight new tables agree with the complete MacBook report, and every shared CLI summary field matches that report. Execution counts run from 118 to 156, so the saved file confirms consecutive execution rather than a kernel restart. No blocking discrepancy was found. This closes the time-grid study; selected Greek stresses remain a separate experiment.
