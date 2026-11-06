@@ -1760,4 +1760,20 @@ The protected default directory is `scratch/runs/arithmetic_25_development`. It 
 
 All 98 tests pass with user warnings treated as errors. New checks compare whole-sample and chunked estimates, replicate means and uncertainty, exercise a non-divisible final IID block, verify chunk allocation bounds, check macOS RSS units, stop actual time- and memory-limited processes, retain failed rows and run a small paired study through save/load. Existing vanilla, geometric, training and continuation regressions pass.
 
-Notebook sections 26-28 load the saved study without fitting. Three new code cells and three figures cover reference precision, all six models' 25-coordinate errors, seed variation and resource cost. Earlier source and MacBook outputs are preserved exactly. The implementation and workspace study are verified. MacBook execution and notebook output review remain the local completion checks.
+Notebook sections 26-28 load the saved study without fitting. Three new code cells and three figures cover reference precision, all six models' 25-coordinate errors, seed variation and resource cost. Earlier source and MacBook outputs are preserved exactly. The implementation, workspace study and MacBook evidence are verified.
+
+### MacBook verification
+
+The MacBook study completes all six 3,000-update fits under the declared limits. All 98 tests pass in 15.978 seconds. The run uses macOS 27.0.1 ARM64, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 with CPU float64 and one thread. The protocol fingerprint and all 23 package-source digests match the workspace run. Selected steps and price/delta findings reproduce to floating-point precision. Standardised independent-reference diagnostics differ by at most approximately 1.1e-12.
+
+The shared reference remains 6.13274065 with pointwise 95% half-width 0.00043547. The largest scaled-delta half-width is 0.00049214. Precision and agreement checks pass at the first allocation. Value-gradient meets the price target at seeds 2026 and 2027 and misses it at 2028. Terminal loss misses it at all three. Neither formulation meets every weight-scaled coordinate-delta target at any seed. All six initial bound checks pass. These outcomes preserve the distinction between an affordable fit and accurate coordinate risk.
+
+| Seed | Value-gradient fit seconds | Terminal-loss fit seconds | Value-gradient worker peak MiB | Terminal-loss worker peak MiB |
+| --- | ---: | ---: | ---: | ---: |
+| 2026 | 12.6225 | 17.7081 | 382.95 | 372.08 |
+| 2027 | 11.7282 | 18.3624 | 442.44 | 367.55 |
+| 2028 | 11.8426 | 18.0666 | 466.45 | 389.48 |
+
+Total study wall time is 107.2763 seconds. Reference-worker peak is 142.98 MiB and controller peak is separately 210.11 MiB on the 8 GiB machine. Every measured worker remains below the 2,048 MiB limit. These observations support the next bounded development attempt, with no extrapolated accuracy or resource guarantee for larger dimensions.
+
+The supplied terminal summary matches the full report. The pushed notebook changes outputs only, with unchanged source, 30 sequential executed code cells and 22 complete figures without error or stderr outputs. The first 19 figures are byte-identical to the preceding verified notebook. The three new figures and eight tables retain all seeds, coordinate errors, reference precision, checkpoint selections and resource use. [Notebook ad0cde4](https://github.com/KVInator/deep-bsde-pricing/commit/ad0cde4c9c57b0c8b399c3113cc15c286f21ad8a)
