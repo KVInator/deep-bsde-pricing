@@ -1916,4 +1916,30 @@ python -m bsde_pricing development-study --case arithmetic-100
 python -m unittest discover -s tests -v
 ```
 
-Results are protected under `scratch/runs/arithmetic_100_development`. All 99 tests pass with user warnings treated as errors, including a reduced-budget 100-asset study through real workers, saved checkpoints, comparison and overwrite protection. Notebook sections 32-34 load the saved results, compare all development seeds across 25, 50 and 100 assets, show all 100 coordinate errors and retain task costs and component timings. Earlier MacBook notebook cells remain unchanged. MacBook execution and pushed-output review remain pending.
+Results are protected under `scratch/runs/arithmetic_100_development`. All 99 tests pass with user warnings treated as errors, including a reduced-budget 100-asset study through real workers, saved checkpoints, comparison and overwrite protection. Notebook sections 32-34 load the saved results, compare all development seeds across 25, 50 and 100 assets, show all 100 coordinate errors and retain task costs and component timings. Earlier MacBook notebook cells remain unchanged. MacBook verification is recorded below.
+
+### MacBook verification
+
+The MacBook report, terminal output and pushed notebook were reviewed on 6 November 2026. All 99 tests pass in 17.723 seconds. The package source digests and specification fingerprint match the workspace. All six fits complete 3,000 updates and select the same checkpoints. Price and coordinate-delta findings reproduce to floating-point precision; standardised independent-reference diagnostics differ by less than 1.4e-12. Reference precision and agreement checks pass at the first allocation.
+
+Value-gradient misses the price target at all three seeds. Terminal loss meets it only at seed 2027. Neither formulation meets every weight-scaled coordinate-delta target. Initial bound violations remain 0, 1 and 1 for value-gradient and 49, 48 and 36 for terminal loss. The accurate terminal-model price at seed 2027 coexists with large coordinate-risk errors. The original targets and all failure records remain intact.
+
+| Seed | Model | Selected update | Fit seconds | Worker peak MiB |
+| --- | --- | ---: | ---: | ---: |
+| 2026 | Value-gradient | 2900 | 41.7260 | 582.28 |
+| 2026 | Terminal loss | 2700 | 41.3747 | 554.88 |
+| 2027 | Value-gradient | 2600 | 38.9300 | 566.39 |
+| 2027 | Terminal loss | 3000 | 41.7236 | 427.83 |
+| 2028 | Value-gradient | 2900 | 38.3088 | 496.47 |
+| 2028 | Terminal loss | 2800 | 39.8820 | 492.53 |
+
+Total local study wall time is 266.7802 seconds. Largest training-worker peak is 582.28 MiB, reference peak is 242.66 MiB and controller peak is separately 211.73 MiB. All task and resource guards pass on the 8 GiB MacBook. The run uses macOS 27.0.1 arm64, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 with CPU float64 and one thread.
+
+| Model | Sampling ms | Objective forward ms | Backward ms | Adam ms | Largest median component |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Terminal loss | 6.4057 | 2.7719 | 1.1863 | 0.9369 | sample_paths |
+| Value-gradient | 6.3970 | 3.4618 | 1.5072 | 0.1124 | sample_paths |
+
+Path sampling remains the largest single median component of both fresh diagnostic workloads. The profile covers two warmups and seven measured updates and supplies no saved-fit accuracy or checkpoint choices. These local timings retain the interpretation limits above.
+
+The [executed notebook at 71f0bd4](https://github.com/KVInator/deep-bsde-pricing/commit/71f0bd4bb8964e9c3bd15f943d78160b53d0aa41) has unchanged source, 36 sequential executed code cells and 28 complete figures, without errors or stderr. Its first 25 figures are byte-identical to prior reviewed evidence. The three new plots and eight tables retain the report's dimensional comparison, every coordinate error and local costs. The terminal summary matches the supplied full report. Milestone 22 is complete with computational feasibility and substantial risk failures both recorded. The next step is the declared time-grid study.
