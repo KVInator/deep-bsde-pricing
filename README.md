@@ -83,6 +83,16 @@ The pilot runs one equal-weight arithmetic case, an independent numerical refere
 
 The workspace reference price is 6.40618406 with a pointwise 95% half-width of 0.00036192. Value-gradient and terminal-loss price errors are +0.13899423 and +0.01152083. Both miss the roadmap's 0.01 price target, and neither meets all weight-scaled delta targets. The reference intervals meet the allocated precision budget. These are one-seed development results. The [arithmetic pilot](docs/methodology.md#ten-asset-arithmetic-pilot) retains every coordinate, the independent-method discrepancies and measured costs. Sections 23-25 of the neural notebook read these saved results.
 
+## Twenty-five-asset development
+
+```bash
+python -m bsde_pricing development-study
+```
+
+The study runs the declared arithmetic 25-asset case at development seeds 2026, 2027 and 2028, using both solvers and the locked common settings. It shares one independent numerical reference across six fits, streams reference samples in chunks, and records worker wall time and resident memory. The protected output directory is `scratch/runs/arithmetic_25_development`. Final seed namespaces remain reserved.
+
+All six workspace fits complete 3,000 updates. Value-gradient meets the original price target at two seeds and misses it at the third. Terminal loss misses it at all three. Neither formulation meets all weight-scaled coordinate-delta targets at any seed. The [development results](docs/methodology.md#twenty-five-asset-arithmetic-development) retain every run, reference uncertainty, resource checks and costs. Notebook sections 26-28 show all 25 coordinate errors and the seed spread.
+
 ## Experiment design
 
 ```bash

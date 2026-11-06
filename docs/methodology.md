@@ -1655,3 +1655,109 @@ python -m unittest discover -s tests -v
 ```
 
 The console prints the design fingerprint, counts and budgets. The JSON export additionally lists all reserved jobs. This step starts no training and draws no final random samples. It adds no notebook output because it introduces a protocol rather than another numerical experiment.
+
+
+## Twenty-five-asset arithmetic development
+
+### Financial scaling and the comparison question
+
+This case increases the arithmetic basket from 10 to 25 assets under the version-one experiment specification. Spots and strike remain 100, maturity one year, rate 3%, volatility 20%, dividends zero and pairwise correlation 0.30. Every weight is 0.04. The basket retains a 100-unit initial level as dimension increases. Both formulations use the same locked width, batch, grid, update schedule and three development seeds. No extra architecture, terminal weighting or seed search is introduced.
+
+Increasing dimension also changes diversification. For basket level \(A=\sum_iw_iS_i\), define instantaneous basket exposures \(b_i=w_iS_i/A\). The instantaneous relative variance is
+
+\[
+\frac{d\langle A\rangle_t}{A_t^2dt}
+=(b\odot\sigma)^\top\rho(b\odot\sigma).
+\]
+
+At the equal-spot initial state with equal volatilities and weights, this reduces to
+
+\[
+v_0=\sigma^2\left(\rho+\frac{1-\rho}{d}\right).
+\]
+
+It falls from 0.0148 at ten assets to 0.01312 at 25 assets. This is an initial instantaneous arithmetic-basket variance and the geometric basket's log-variance rate under the same equal weights. It is not the arithmetic basket's terminal log variance. For the equal-carry arithmetic case the exact terminal relative variance is
+
+\[
+\frac{\operatorname{Var}(A_T)}{\mathbb E[A_T]^2}
+=\frac{e^{\sigma^2T}-1}{d}
++\left(1-\frac1d\right)(e^{\rho\sigma^2T}-1).
+\]
+
+The report evaluates the joint-lognormal formula using the model's full covariance matrix. Correlation eigenvalues are 0.70 with multiplicity 24 and 8.20 once. Initial diffusion condition number is therefore \(\sqrt{8.20/0.70}\). Dimension, effective variance and conditioning are distinct characteristics of the problem.
+
+### Streaming the existing reference
+
+`BasketReferencePricer` accepts an optional chunk size for both reference methods. The default whole-sample API retains its previous results. Chunked Sobol evaluation draws consecutive blocks from each scrambled net and accumulates target/control sums. It preserves the complete net and its scramble-level sampling unit. It does not average independent chunks as if they were new scrambles.
+
+For IID antithetic pair averages, each block contributes a count, mean and sum of squared deviations. Two groups with counts \(n_a,n_b\), means \(m_a,m_b\) and centred sums \(M_{2,a},M_{2,b}\) merge as
+
+\[
+\delta=m_b-m_a,\quad n=n_a+n_b,\qquad
+m=m_a+\frac{n_b}{n}\delta,
+\]
+\[
+M_2=M_{2,a}+M_{2,b}+\frac{n_an_b}{n}\delta^2.
+\]
+
+The sample variance is \(M_2/(n-1)\), and the standard error divides its square root by \(\sqrt n\). Antithetic pairs remain the independent units. The final partial block is included with its actual count. Neither method retains the full terminal sample. Independent coefficient pilots remain separate and the known geometric-control expectations retain their analytical calculation.
+
+The development study uses chunks of 4,096 pair averages or Sobol states. Its first reference allocation is 16 independent scrambles of 2^16 points, checked against 131,072 antithetic pairs. If either precision or the declared method-agreement check fails, the next allocation is 2^18 points with 524,288 IID pairs. Coefficient pilots have 4,096 independent pairs. The two allocation levels share reference seeds and are dependent. Development reference seeds are 2032 and 2033, outside the reserved final namespaces.
+
+The retained reference uses power 16. Its price is **6.13274065** with pointwise 95% half-width **0.00043547**. The largest weight-scaled delta half-width is **0.00049214**. Reference usability is `true` under the original 0.002 half-width allocations and four-combined-standard-error agreement screen. The largest absolute independent-method standardised difference is 1.42740. The report retains every coordinate and approximate pointwise interval, with no simultaneous coverage claim.
+
+### Six development fits
+
+Development seeds are 2026, 2027 and 2028. Every fit uses width 16, 128 paths per update, 16 intervals and 3,000 Adam updates, with 256 fixed validation paths and 2,048 post-fit paths. Initial states have shape (128,17,25), and independent Brownian increments have shape (128,16,25). The value-gradient network has 721 parameters. The separate terminal-control subnetworks have 16,721 parameters. Checkpoint selection retains each solver's minimum scheduled validation objective. Reference prices and deltas enter only the independent comparison process after fitting.
+
+| Seed | Model | Selected / completed update | Initial price error | Price classification | Largest absolute scaled-delta error |
+| --- | --- | ---: | ---: | --- | ---: |
+| 2026 | Terminal loss | 2900 / 3000 | -0.02792348 | outside_target | 0.16524410 |
+| 2026 | Value-gradient | 2900 / 3000 | +0.00140665 | within_target | 0.22682738 |
+| 2027 | Terminal loss | 2500 / 3000 | -0.01343619 | outside_target | 0.22284046 |
+| 2027 | Value-gradient | 2900 / 3000 | +0.00502464 | within_target | 0.19893607 |
+| 2028 | Terminal loss | 2800 / 3000 | +0.03211951 | outside_target | 0.16015147 |
+| 2028 | Value-gradient | 3000 / 3000 | +0.04720704 | outside_target | 0.07709504 |
+
+Value-gradient meets the 0.01 price target at two seeds and misses it at the third. Terminal loss misses the price target at all three. Neither formulation meets all 25 weight-scaled delta targets at any seed. The mean terminal-model price error is close to zero because errors change sign across seeds. It does not establish accurate individual runs. Three seeds provide a descriptive development comparison, without a robust superiority claim.
+
+| Model | Mean signed price error | Sample standard deviation | Price-error range | Worst-coordinate scaled-error range |
+| --- | ---: | ---: | --- | --- |
+| Terminal loss | -0.00308006 | 0.03133253 | [-0.02792348, +0.03211951] | [0.16015147, 0.22284046] |
+| Value-gradient | +0.01787944 | 0.02546279 | [+0.00140665, +0.04720704] | [0.07709504, 0.22682738] |
+
+Initial arithmetic delta bounds, directional delta sums, all coordinate errors and control-reconstruction diagnostics remain in each model record. A small reconstruction residual verifies the diffusion solve for the supplied controls. It does not resolve learned-delta errors. Conditional arithmetic path references are still unavailable, so the study reports no arithmetic path-risk RMSE or comparable global terminal-solver gamma.
+
+### Resource budgets and retained evidence
+
+The shared pilot worker now deserialises the declared financial case. `ArithmeticDevelopmentStudy` orchestrates one shared reference and the three paired fits using the specification's common configuration. Every run retains the specification fingerprint and SHA-256 digests of the package source files. Numerical kernels, training objectives and physical initial-risk recovery remain in their existing components.
+
+The parent runs workers sequentially and polls resident memory every 0.2 seconds. Linux uses `/proc` resident memory and macOS uses `ps` RSS in KiB. It additionally checks the worker's own lifetime peak after exit. A 2,048 MiB breach or a wall-time limit terminates the worker and retains its guard and failure records. A rapid memory spike may only be identified from the completed worker's peak. This sampled RSS guard is a resource check, rather than an operating-system allocation quota.
+
+Neural fits retain their 180-second soft fitting cap and a 300-second worker wall cap. Each reference allocation has a 180-second wall cap. Comparison has its own bounded worker. A timeout, memory failure, numerical failure or unusable reference remains in the report. A noisy reference marks model accuracy comparisons inconclusive. Raw point estimates remain available. Worker-wall cost includes all recorded attempts, including failures, and is separate from measured optimisation time.
+
+| Seed | Model | Fit seconds | Paired evaluation seconds | Worker wall seconds | Peak resident MiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2026 | Terminal loss | 25.9822 | 0.0913 | 28.3590 | 362.00 |
+| 2026 | Value-gradient | 19.1822 | 0.1694 | 21.6952 | 400.18 |
+| 2027 | Terminal loss | 25.6876 | 0.0902 | 28.0746 | 362.52 |
+| 2027 | Value-gradient | 18.8416 | 0.1734 | 21.3430 | 408.39 |
+| 2028 | Terminal loss | 25.6931 | 0.0927 | 28.0510 | 362.90 |
+| 2028 | Value-gradient | 19.0659 | 0.1679 | 21.4952 | 400.04 |
+
+All six workspace fits complete 3,000 updates. The largest training-worker peak is 408.39 MiB, with controller peak 240.42 MiB recorded separately. Total measured study wall time is 155.8639 seconds. The runtime is Linux x86-64, Python 3.12.14, NumPy 2.3.5 and PyTorch 2.15.0+cpu, using CPU float64 and one thread. These are workspace measurements. MacBook results and resource use require separate verification.
+
+The retained implementation-check and measured-reproduction runs use identical settings and seeds. Their combined cost belongs to development cost. The common configuration transfers computationally to this 25-asset case under the declared limits. Its accuracy remains mixed for price and insufficient for the coordinate-risk targets. A higher dimension is not automatically a more difficult economic instance because diversification changes as well.
+
+### Reproduction and checks
+
+```bash
+python -m bsde_pricing development-study
+python -m unittest discover -s tests -v
+```
+
+The protected default directory is `scratch/runs/arithmetic_25_development`. It contains the declared design, every attempted reference level, all three seed directories, full training histories, selected and final/continuation checkpoints, comparison records, task logs and resource guards. `report.json` is updated after each seed. Final training and estimator streams remain untouched. The locked experiment JSON and its fingerprint remain unchanged.
+
+All 98 tests pass with user warnings treated as errors. New checks compare whole-sample and chunked estimates, replicate means and uncertainty, exercise a non-divisible final IID block, verify chunk allocation bounds, check macOS RSS units, stop actual time- and memory-limited processes, retain failed rows and run a small paired study through save/load. Existing vanilla, geometric, training and continuation regressions pass.
+
+Notebook sections 26-28 load the saved study without fitting. Three new code cells and three figures cover reference precision, all six models' 25-coordinate errors, seed variation and resource cost. Earlier source and MacBook outputs are preserved exactly. The implementation and workspace study are verified. MacBook execution and notebook output review remain the local completion checks.

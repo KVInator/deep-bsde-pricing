@@ -242,6 +242,9 @@ def main() -> None:
     risk.add_argument("--seed", type=int, default=2031)
     design = commands.add_parser("experiment-design", help="validate the specification and export reserved jobs without running them")
     design.add_argument("--spec", type=Path)
+    development = commands.add_parser("development-study", help="run the bounded arithmetic development case with three seeds")
+    development.add_argument("--case", choices=("arithmetic-25",), default="arithmetic-25")
+    development.add_argument("--run-dir", type=Path, default=Path("scratch/runs/arithmetic_25_development"))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
                     basket_reference, bsde_diagnostic, autograd, bsde_loss, design):
         command.add_argument(
@@ -250,6 +253,18 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "development-study":
+            from .development_study import ArithmeticDevelopmentStudy
+
+            result = ArithmeticDevelopmentStudy(args.case).run(args.run_dir)
+            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
+                              "specification_sha256": result["specification_sha256"],
+                              "reference_usable": result["reference_usable"], "reference_levels": result["reference_levels"],
+                              "summary": result["summary"], "wall_seconds": result["wall_seconds"]},
+                             indent=2, sort_keys=True, allow_nan=False))
+            if result["status"] != "completed":
+                parser.exit(1, "Development study incomplete; inspect retained task and reference records.\n")
+            return
         if args.command == "experiment-design":
             from .experiment_design import ExperimentDesign
 

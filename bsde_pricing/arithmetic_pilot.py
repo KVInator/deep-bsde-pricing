@@ -77,6 +77,68 @@ def _peak_rss_mib() -> float:
     raise RuntimeError("Peak resident memory measurement requires macOS or Linux.")
 
 
+class WorkerLimitError(RuntimeError):
+    """An isolated task exceeded its declared wall or resident-memory budget."""
+
+
+def _child_rss_mib(pid: int) -> float | None:
+    if platform.system() == "Linux":
+        try:
+            lines = Path(f"/proc/{pid}/status").read_text().splitlines()
+        except FileNotFoundError:
+            return None
+        for line in lines:
+            if line.startswith("VmRSS:"):
+                return float(line.split()[1])/1024
+        return None  # A process that has exited can remain briefly as a zombie.
+    result = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True)
+    if not result.stdout.strip():
+        return None
+    return float(result.stdout.strip())/1024
+
+
+def _guarded_worker(command, environment, log, directory, kind, limits):
+    started = time.perf_counter()
+    peak, status = 0.0, "completed"
+    with subprocess.Popen(command, env=environment, stdout=log, stderr=subprocess.STDOUT) as process:
+        try:
+            while process.poll() is None:
+                rss = _child_rss_mib(process.pid)
+                peak = max(peak, rss if rss is not None else 0)
+                if peak > limits["worker_peak_resident_mib"]:
+                    status = "memory_limit"
+                    break
+                if time.perf_counter()-started >= limits["worker_wall_seconds"]:
+                    status = "time_limit"
+                    break
+                try:
+                    process.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        resource_path = directory/f"{kind}_resources.json"
+        if resource_path.exists():
+            peak = max(peak, json.loads(resource_path.read_text())["peak_resident_mib"])
+        if peak > limits["worker_peak_resident_mib"]:
+            status = "memory_limit"
+        _write_json(directory/f"{kind}_guard.json", {
+            "status": status if status != "completed" or process.returncode == 0 else "numerical_failure",
+            "peak_resident_mib": peak, "process_wall_seconds": time.perf_counter()-started,
+            "returncode": process.returncode, "poll_seconds": 0.2, "limits": limits,
+        })
+        if status != "completed":
+            raise WorkerLimitError(f"{kind}: {status}")
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, command)
+
+
 def _reference_report(case, config: dict) -> dict:
     import numpy as np
 
@@ -84,14 +146,15 @@ def _reference_report(case, config: dict) -> dict:
 
     pricer = BasketReferencePricer(case.model, case.contract)
     levels = []
-    for power in (config["coarse_power"], config["reference_power"]):
+    chunk = {"chunk_size": config["chunk_size"]} if "chunk_size" in config else {}
+    for power in config.get("powers", (config["coarse_power"], config["reference_power"])):
         started = time.perf_counter()
         result = pricer.sobol(case.initial_spots, power=power, scrambles=config["scrambles"],
-                              pilot_pairs=config["pilot_pairs"], seed=config["reference_seed"])
+                              pilot_pairs=config["pilot_pairs"], seed=config["reference_seed"], **chunk)
         levels.append({"power": power, "seconds": time.perf_counter()-started, **asdict(result)})
     started = time.perf_counter()
     check = pricer.antithetic(case.initial_spots, n_pairs=config["check_pairs"],
-                              pilot_pairs=config["pilot_pairs"], seed=config["check_seed"])
+                              pilot_pairs=config["pilot_pairs"], seed=config["check_seed"], **chunk)
     check_seconds = time.perf_counter()-started
     primary = levels[-1]["controlled"]
     half = [_half_width(s) for s in (primary["price"], *primary["deltas"])]
@@ -114,7 +177,8 @@ def _reference_report(case, config: dict) -> dict:
             "error_budget_met": {"price": price_ok, "all_scaled_deltas": delta_ok},
             "independent_method_agreement": agreement,
             "interval_scope": "pointwise approximate 95% intervals; no simultaneous coverage claim",
-            "refinement_scope": "same scramble seeds and pilot at both Sobol sizes; levels are dependent"}
+            "refinement_scope": ("one allocation; refinement records retained by the development study" if "powers" in config else
+                                 "same scramble seeds and pilot at both Sobol sizes; levels are dependent")}
 
 
 def _half_width(stat: dict) -> float | None:
@@ -142,16 +206,23 @@ def _worker(kind: str, directory: Path) -> None:
     """Run exactly one task in a fresh process, retaining its own RSS peak."""
     design = json.loads((directory/"design.json").read_text())
     config = design["config"]
-    from .problems import arithmetic_ten_case
+    from .problems import EuropeanCall, GBMModel, PricingCase
 
-    case = arithmetic_ten_case()
-    if json.loads(case.to_json()) != design["problem"]:
-        raise ValueError("Pilot design disagrees with the implemented financial case.")
+    problem = design["problem"]
+    case = PricingCase(problem["name"], GBMModel(**problem["model"]),
+                       EuropeanCall(**problem["contract"]), problem["initial_spots"])
     started = time.perf_counter()
     baseline_peak = _peak_rss_mib()
     if kind == "reference":
         result = _reference_report(case, config)
         _write_json(directory/"reference.json", result)
+    elif kind == "comparison":
+        from .training import PathTrainingConfig
+
+        options = {k: v for k, v in config.items() if k not in ("powers", "chunk_size")}
+        options["training"] = PathTrainingConfig(**options["training"])
+        reference = json.loads((directory/"reference.json").read_text())
+        _write_json(directory/"comparison.json", ArithmeticPilot(ArithmeticPilotConfig(**options))._compare(directory, reference))
     else:
         from .training import PathTrainingConfig, TrainingConfig, train_and_save
         from .terminal_bsde import train_terminal_and_save
@@ -184,16 +255,19 @@ class ArithmeticPilot:
     def __init__(self, config: ArithmeticPilotConfig | None = None):
         self.config = ArithmeticPilotConfig() if config is None else config
 
-    def _run_worker(self, kind: str, directory: Path) -> None:
+    def _run_worker(self, kind: str, directory: Path, *, limits: dict | None = None) -> None:
         environment = os.environ.copy()
         for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
             environment[name] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         with (directory/f"{kind}.log").open("w") as log:
-            subprocess.run([sys.executable, "-B", "-m", "bsde_pricing.arithmetic_pilot",
-                            "--worker", kind, "--run-dir", str(directory.resolve())],
-                           env=environment, stdout=log, stderr=subprocess.STDOUT, check=True,
-                           timeout=self.config.training.max_seconds+120 if kind != "reference" else 180)
+            command = [sys.executable, "-B", "-m", "bsde_pricing.arithmetic_pilot",
+                       "--worker", kind, "--run-dir", str(directory.resolve())]
+            if limits is None:
+                subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT, check=True,
+                               timeout=self.config.training.max_seconds+120 if kind != "reference" else 180)
+            else:
+                _guarded_worker(command, environment, log, directory, kind, limits)
 
     def _compare(self, directory: Path, reference: dict) -> dict:
         import numpy as np
@@ -307,7 +381,7 @@ class ArithmeticPilot:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Internal isolated arithmetic-pilot worker")
-    parser.add_argument("--worker", required=True, choices=("reference", "value_gradient", "terminal_loss"))
+    parser.add_argument("--worker", required=True, choices=("reference", "value_gradient", "terminal_loss", "comparison"))
     parser.add_argument("--run-dir", required=True, type=Path)
     arguments = parser.parse_args()
     _worker(arguments.worker, arguments.run_dir)
