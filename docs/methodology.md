@@ -2244,3 +2244,9 @@ python -m bsde_pricing martingale-control --case geometric-five --output scratch
 ```
 
 The reports retain the grid estimates, sample variances, standard errors, control means, isometry gaps, seed lineage and runtime. [Control variates](../notebooks/04_control_variates.ipynb) reads the two reports and displays all rows. The results above use Linux x86-64, Python 3.12.14, NumPy 2.3.5 and SciPy 1.17.0.
+
+### MacBook verification
+
+The macOS ARM64 run used Python 3.12.16, NumPy 2.5.4 and SciPy 1.18.1. All 110 tests passed in 33.887 seconds with UserWarnings treated as errors. Both 16,384-path reports match the workspace estimates and diagnostics to floating-point precision across all five grids. The 64-interval variance ratios are 187.88 for vanilla and 165.85 for geometric five. The eight-interval geometric estimate again lies 2.06 standard errors above the exact price.
+
+The [executed notebook at 94901d0](https://github.com/KVInator/deep-bsde-pricing/commit/94901d05768c34a766f826956a621fe2353c7a16) contains four consecutively executed code cells, three tables and one figure. The source matches the implementation notebook, the tables match the MacBook reports, and the saved outputs contain no execution errors.
