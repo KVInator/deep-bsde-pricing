@@ -1,13 +1,12 @@
 """Extract the notebook tables from a final-suite ledger."""
 
-import argparse
 import hashlib
 import json
 from collections import Counter
 from pathlib import Path
 from statistics import median
 
-from bsde_pricing.control_cost import _matched_precision, _summarise
+from .control_cost import _matched_precision, _summarise
 
 
 def _reference(row):
@@ -93,19 +92,12 @@ def summarize(report: dict) -> dict:
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("report", type=Path)
-    parser.add_argument("output", type=Path)
-    args = parser.parse_args()
-    if args.report.resolve() == args.output.resolve():
-        parser.error("The output must differ from the source ledger.")
-    source = args.report.read_bytes()
+def write_summary(report: Path, output: Path) -> None:
+    if report.resolve() == output.resolve():
+        raise ValueError("The output must differ from the source ledger.")
+    source = report.read_bytes()
     summary = summarize(json.loads(source))
     summary["report_sha256"] = hashlib.sha256(source).hexdigest()
     encoded = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
-    args.output.write_text(encoded+"\n", encoding="utf-8")
-
-
-if __name__ == "__main__":
-    main()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(encoded+"\n", encoding="utf-8")

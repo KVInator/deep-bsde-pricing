@@ -1,20 +1,16 @@
 """Matched-precision costs for repeated estimates of one arithmetic call."""
 
 import math
-import platform
 import time
 from dataclasses import asdict
-from pathlib import Path
 from statistics import median
 
 import numpy as np
-import scipy
-import torch
 from scipy.stats import t
 
 from .basket_reference import BasketReferencePricer
 from .experiment_design import ExperimentDesign
-from .learned_control import _load_frozen_pilot, _pair_samples, _pilot_coefficient
+from .learned_control import FrozenControls, _pair_samples, _pilot_coefficient
 from .martingale import MartingaleEstimator
 from .monte_carlo import _statistics
 
@@ -83,25 +79,18 @@ def _matched_precision(allocations: list[dict], fixed_costs: dict, repetitions: 
 
 
 class ControlCostStudy:
-    """Measure nested allocations on independent development repetitions."""
+    """Evaluate frozen controls and conventional estimators on nested allocations."""
 
-    @classmethod
-    def from_pilot(cls, pilot_directory: Path, design: ExperimentDesign):
-        return cls(design, *_load_frozen_pilot(pilot_directory, design))
-
-    def __init__(self, design: ExperimentDesign, frozen, checkpoints, reference, pilot_sha, load_seconds):
-        self.design = design
+    def __init__(self, design: ExperimentDesign, frozen: FrozenControls):
         spec = design.data
         protocol = spec["estimators"]
         self.case = design.case(protocol["reference_case"])
-        self.seed = spec["development_seeds"][0]
         self.counts = tuple(protocol["antithetic_pairs"])
-        self.repetitions = protocol["repetitions"]
         self.pilot_pairs = protocol["coefficient_pilot_pairs"]
         self.scrambles = spec["reference"]["scrambles"]
         self.chunk_paths = spec["resources"]["evaluation_chunk_paths"]
         self.reference_chunk = spec["reference"]["chunk_terminal_states"]
-        if self.repetitions < 2 or self.chunk_paths < 2:
+        if protocol["repetitions"] < 2 or self.chunk_paths < 2:
             raise ValueError("Cost studies require independent repeats and a complete pair per chunk.")
         self.powers = {}
         for count in self.counts:
@@ -109,8 +98,7 @@ class ControlCostStudy:
             if remainder or points < 2 or points & (points-1):
                 raise ValueError("Each allocation must match a power of two per Sobol scramble.")
             self.powers[count] = points.bit_length()-1
-        self.frozen, self.checkpoints, self.reference = frozen, checkpoints, reference
-        self.pilot_sha, self.load_seconds = pilot_sha, load_seconds
+        self.frozen = frozen
         self.estimator = MartingaleEstimator(self.case)
         self.pricer = BasketReferencePricer(self.case.model, self.case.contract)
         self.controls = {"analytical_geometric_proxy": self.frozen.geometric_proxy(),
@@ -124,9 +112,9 @@ class ControlCostStudy:
 
     def _martingale_rows(self, rows, pilot_stream, evaluation_stream):
         for kind, control in self.controls.items():
-            fit = kind in self.checkpoints
+            fit_coefficient = kind != "analytical_geometric_proxy"
             pilot_seconds, coefficient = 0.0, None
-            if fit:
+            if fit_coefficient:
                 start = time.perf_counter()
                 pilot = self._path_pairs(np.random.default_rng(pilot_stream), self.pilot_pairs, control)
                 coefficient = _pilot_coefficient(*pilot)
@@ -141,7 +129,7 @@ class ControlCostStudy:
                 elapsed += time.perf_counter()-start
                 unit = _row(payoff[:count]-integral[:count], 1.0, 0.0, elapsed)
                 rows[count][kind+"_unit"] = unit
-                if fit:
+                if fit_coefficient:
                     beta = 0.0 if coefficient is None else coefficient
                     fitted = _row(payoff[:count]-beta*integral[:count], beta, pilot_seconds, elapsed)
                     fitted["degenerate_pilot"] = coefficient is None
@@ -181,46 +169,3 @@ class ControlCostStudy:
         self._martingale_rows(rows, pilot, evaluation)
         self._conventional_rows(rows, antithetic, sobol)
         return rows
-
-    def run(self) -> dict:
-        start = time.perf_counter()
-        records = {n: [] for n in self.counts}
-        threads = torch.get_num_threads()
-        try:
-            torch.set_num_threads(1)
-            streams = np.random.SeedSequence(self.seed, spawn_key=(27,)).spawn(self.repetitions)
-            for stream in streams:
-                for count, methods in self.repetition(*stream.spawn(4)).items():
-                    records[count].append({"spawn_key": list(stream.spawn_key), "methods": methods})
-        finally:
-            torch.set_num_threads(threads)
-
-        allocations, fixed, matched = self.summarise(records)
-        return {
-            "method": "development_control_cost_study", "case": self.case.name,
-            "specification_sha256": self.design.sha256, "pilot_report_sha256": self.pilot_sha,
-            "development_seed": self.seed, "steps": self.frozen.steps, "repetitions": self.repetitions,
-            "pilot_pairs": self.pilot_pairs, "scrambles": self.scrambles, "reference": self.reference,
-            "checkpoints": self.checkpoints, "fixed_costs": fixed, "allocations": allocations,
-            "matched_precision": matched,
-            "wall_seconds": time.perf_counter()-start,
-            "runtime": {"python": platform.python_version(), "system": platform.platform(),
-                        "numpy": np.__version__, "scipy": scipy.__version__, "torch": torch.__version__},
-        }
-
-    def summarise(self, records):
-        allocations = []
-        for count, repeats in records.items():
-            methods = {name: _summarise([r["methods"][name] for r in repeats], self.reference["estimate"])
-                       for name in repeats[0]["methods"]}
-            allocations.append({"pairs": count, "sobol_points_per_scramble": 2**self.powers[count],
-                                "methods": methods, "repetitions": repeats})
-        fixed = {}
-        for name in allocations[0]["methods"]:
-            kind = name.removesuffix("_unit").removesuffix("_fitted")
-            fixed[name] = {
-                "training_seconds": self.checkpoints.get(kind, {}).get("training_seconds", 0.0),
-                "additional_tuning_seconds": 0.0,
-                "checkpoint_setup_seconds": self.load_seconds.get(kind, 0.0),
-            }
-        return allocations, fixed, _matched_precision(allocations, fixed, self.repetitions)

@@ -1,12 +1,10 @@
-"""Command-line entry point for pricing experiments and runtime diagnostics."""
+"""Command-line entry point for pricing and the locked study."""
 
 import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-from .environment import EnvironmentReport
 
 if TYPE_CHECKING:
     from .black_scholes import BlackScholesResult
@@ -152,9 +150,6 @@ def _bsde_diagnostic_summary(args: argparse.Namespace, case: "PricingCase") -> d
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m bsde_pricing")
     commands = parser.add_subparsers(dest="command", required=True)
-    environment = commands.add_parser(
-        "environment", help="check numerical dependencies and report the runtime"
-    )
     describe = commands.add_parser(
         "describe", help="show a pricing case and its financial conventions"
     )
@@ -211,25 +206,8 @@ def main() -> None:
     martingale.add_argument("--paths", type=int, default=16_384)
     martingale.add_argument("--seed", type=int, default=2026)
     martingale.add_argument("--steps", type=int, nargs="+", default=(4, 8, 16, 32, 64))
-    learned = commands.add_parser(
-        "learned-control", help="compare frozen arithmetic-pilot controls with conventional estimates",
-    )
-    learned.add_argument("--pilot-dir", type=Path, default=Path("scratch/runs/arithmetic_ten_pilot"))
-    costs = commands.add_parser(
-        "control-cost", help="measure repeated fixed-contract estimates at matched precision",
-    )
-    costs.add_argument("--pilot-dir", type=Path, default=Path("scratch/runs/arithmetic_ten_pilot"))
     final_suite = commands.add_parser("final-suite", help="execute or resume the locked confirmatory suite")
     final_suite.add_argument("--run-dir", type=Path, default=Path("scratch/runs/final_suite"))
-    autograd = commands.add_parser("autograd", help="check physical derivatives and CPU/MPS workloads")
-    autograd.add_argument("--backend", choices=("auto", "cpu", "mps"), default="auto")
-    autograd.add_argument("--batch-size", type=int, default=256)
-    autograd.add_argument("--repeats", type=int, default=5)
-    bsde_loss = commands.add_parser("bsde-loss", help="check local BSDE loss against known solutions")
-    bsde_loss.add_argument("--case", choices=("vanilla", "geometric"), default="vanilla")
-    bsde_loss.add_argument("--paths", type=int, default=2048)
-    bsde_loss.add_argument("--seed", type=int, default=2026)
-    bsde_loss.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64))
     train = commands.add_parser("train", help="fit the value-gradient solver")
     train.add_argument("--case", choices=("vanilla", "geometric-five", "arithmetic-ten"))
     train.add_argument("--run-dir", type=Path)
@@ -239,100 +217,34 @@ def main() -> None:
     train.add_argument("--patience", type=int, help="stop after this many validation checks without improvement")
     train.add_argument("--stop-after", type=int, help="pause at this absolute update count")
     train.add_argument("--resume", type=Path, help="continue a resume.pt checkpoint with its saved configuration")
-    study = commands.add_parser("training-study", help="compare three fixed seeds and terminal weights 1 and 5")
-    study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/reproducibility"))
     terminal_train = commands.add_parser("train-terminal", help="fit the terminal-loss Deep BSDE solver")
     terminal_train.add_argument("--case", choices=("vanilla", "geometric-five", "arithmetic-ten"), default="vanilla")
     terminal_train.add_argument("--run-dir", type=Path)
     terminal_train.add_argument("--iterations", type=int, default=3000)
     terminal_train.add_argument("--seed", type=int, default=2026)
-    arithmetic = commands.add_parser("arithmetic-pilot", help="run the bounded ten-asset reference and both neural fits")
-    arithmetic.add_argument("--run-dir", type=Path, default=Path("scratch/runs/arithmetic_ten_pilot"))
-    arithmetic.add_argument("--iterations", type=int, default=3000)
-    arithmetic.add_argument("--seed", type=int, default=2026)
-    arithmetic.add_argument("--max-seconds", type=float, default=180)
-    risk = commands.add_parser("compare-risk", help="compare saved models and recover control-based deltas")
-    risk.add_argument("--value-run", type=Path, default=Path("scratch/runs/reproducibility/seed_2026_weight_1"))
-    risk.add_argument("--terminal-run", type=Path, default=Path("scratch/runs/vanilla_terminal_bsde"))
-    risk.add_argument("--run-dir", type=Path, default=Path("scratch/runs/vanilla_risk_comparison"))
-    risk.add_argument("--paths", type=int, default=2048)
-    risk.add_argument("--seed", type=int, default=2031)
     design = commands.add_parser("experiment-design", help="validate the specification and export reserved jobs without running them")
     design.add_argument("--spec", type=Path)
-    development = commands.add_parser("development-study", help="run the bounded arithmetic development case with three seeds")
-    development.add_argument("--case", choices=("arithmetic-25", "arithmetic-50", "arithmetic-100"), default="arithmetic-25")
-    development.add_argument("--run-dir", type=Path)
-    grid_study = commands.add_parser("grid-study", help="compare the locked time grids at development seeds")
-    grid_study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/arithmetic_10_grid_study"))
-    stress_study = commands.add_parser("stress-study", help="run the declared financial stresses and Greek diagnostics")
-    stress_study.add_argument("--run-dir", type=Path, default=Path("scratch/runs/greek_stress_study"))
-    stress_study.add_argument("--geometric-value", type=Path, default=Path("scratch/runs/geometric_five_fbsnn"))
-    stress_study.add_argument("--geometric-terminal", type=Path, default=Path("scratch/runs/geometric_five_terminal_bsde"))
-    for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
-                    basket_reference, bsde_diagnostic, martingale, learned, costs, autograd, bsde_loss, design):
+    summarize = commands.add_parser("summarize", help="write the study summary from a completed ledger")
+    summarize.add_argument("report", type=Path)
+    summarize.add_argument("output", type=Path)
+    for command in (describe, reference, monte_carlo, finite_difference, sample,
+                    basket_reference, bsde_diagnostic, martingale, design):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
     args = parser.parse_args()
 
     try:
+        if args.command == "summarize":
+            from .reporting import write_summary
+
+            write_summary(args.report, args.output)
+            return
         if args.command == "final-suite":
             from .final_suite import FinalSuite
 
             summary = FinalSuite(args.run_dir).run()
             print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
-            return
-        if args.command in ("learned-control", "control-cost"):
-            if args.command == "learned-control":
-                from .learned_control import run_learned_control_study
-
-                summary = run_learned_control_study(args.pilot_dir)
-            else:
-                from .control_cost import ControlCostStudy
-                from .experiment_design import ExperimentDesign
-
-                summary = ControlCostStudy.from_pilot(args.pilot_dir, ExperimentDesign.load()).run()
-            report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
-            if args.output is not None:
-                args.output.parent.mkdir(parents=True, exist_ok=True)
-                args.output.write_text(report+"\n", encoding="utf-8")
-            if args.command == "control-cost" and args.output is not None:
-                print(json.dumps({"report": str(args.output), "wall_seconds": summary["wall_seconds"],
-                                  "matched_precision": summary["matched_precision"]},
-                                 indent=2, sort_keys=True, allow_nan=False))
-            else:
-                print(report)
-            return
-        if args.command == "stress-study":
-            from .greek_study import GreekStressStudy
-
-            result = GreekStressStudy().run(args.run_dir, geometric_value=args.geometric_value,
-                                            geometric_terminal=args.geometric_terminal)
-            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
-                              "specification_sha256": result["specification_sha256"],
-                              "scheduled_fits": result["scheduled_fits"], "wall_seconds": result["wall_seconds"],
-                              "cases": [{"case": c["case"], "status": c["study"]["status"],
-                                         "reference_usable": c["study"]["reference_usable"],
-                                         "summary": c["study"]["summary"], "greeks_status": c["greeks"]["status"]}
-                                        for c in result["cases"]], "asymmetric_status": result["asymmetric"]["status"]},
-                             indent=2, sort_keys=True, allow_nan=False))
-            if result["status"] != "completed":
-                parser.exit(1, "Greek stress study incomplete; inspect retained task and reference records.\n")
-            return
-        if args.command in ("development-study", "grid-study"):
-            from .development_study import ArithmeticDevelopmentStudy, TimeGridStudy
-
-            if args.run_dir is None:
-                args.run_dir = Path("scratch/runs")/f"{args.case.replace('-', '_')}_development"
-            study = TimeGridStudy() if args.command == "grid-study" else ArithmeticDevelopmentStudy(args.case)
-            result = study.run(args.run_dir)
-            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
-                              "specification_sha256": result["specification_sha256"],
-                              "reference_usable": result["reference_usable"], "reference_levels": result["reference_levels"],
-                              "summary": result["summary"], "wall_seconds": result["wall_seconds"]},
-                             indent=2, sort_keys=True, allow_nan=False))
-            if result["status"] != "completed":
-                parser.exit(1, "Development study incomplete; inspect retained task and reference records.\n")
             return
         if args.command == "experiment-design":
             from .experiment_design import ExperimentDesign
@@ -344,27 +256,6 @@ def main() -> None:
                 args.output.write_text(report+"\n")
             print(json.dumps({k: v for k, v in summary.items() if k != "jobs"}, indent=2, sort_keys=True, allow_nan=False))
             return
-        if args.command == "arithmetic-pilot":
-            from .arithmetic_pilot import ArithmeticPilot, ArithmeticPilotConfig
-            from .training import PathTrainingConfig
-
-            result = ArithmeticPilot(ArithmeticPilotConfig(training=PathTrainingConfig(
-                iterations=args.iterations, seed=args.seed, max_seconds=args.max_seconds,
-            ))).run(args.run_dir)
-            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
-                              "reference_error_budget": result["reference"]["error_budget_met"],
-                              "reference_price": result["reference"]["primary"]["price"],
-                              "max_reference_scaled_delta_half_width": max(result["reference"]["reference_scaled_delta_half_widths"]),
-                              "models": {k: {
-                                  "price": m["initial"]["price"], "price_check": m["price_check"],
-                                  "scaled_delta_signed_errors": [d["signed_error"] for d in m["scaled_delta_checks"]],
-                                  "scaled_delta_classifications": [d["classification"] for d in m["scaled_delta_checks"]],
-                                  "source": m["source"],
-                              } for k, m in result["models"].items()},
-                              "resources": result["resources"],
-                              "budget_projection": result["budget_projection"]},
-                             indent=2, sort_keys=True, allow_nan=False))
-            return
         if args.command in ("train", "train-terminal"):
             from .problems import arithmetic_ten_case, geometric_five_case, vanilla_case
 
@@ -373,16 +264,6 @@ def main() -> None:
                 suffix = "fbsnn" if args.command == "train" else "terminal_bsde"
                 prefix = {"geometric-five": "geometric_five", "arithmetic-ten": "arithmetic_ten"}.get(args.case, "vanilla")
                 args.run_dir = Path("scratch/runs")/f"{prefix}_{suffix}"
-        if args.command == "compare-risk":
-            from .risk_comparison import compare_saved_runs
-
-            result = compare_saved_runs(args.value_run, args.terminal_run, args.run_dir,
-                                        n_paths=args.paths, seed=args.seed)
-            print(json.dumps({"run_directory": str(args.run_dir), "models": result.report["models"],
-                              "value_gradient_gamma": result.report["value_gradient_gamma"],
-                              "targets_met": result.report["targets_met"]},
-                             indent=2, sort_keys=True, allow_nan=False))
-            return
         if args.command == "train-terminal":
             from .terminal_bsde import train_terminal_and_save
             from .training import PathTrainingConfig
@@ -395,18 +276,6 @@ def main() -> None:
                               "parameter_count": result["parameter_count"], "training_seconds": result["training_seconds"],
                               "evaluation": result["evaluation"], "targets_met": result["targets_met"]},
                              indent=2, sort_keys=True, allow_nan=False))
-            return
-        if args.command == "training-study":
-            from .problems import vanilla_case
-            from .training_study import TrainingStudy
-
-            result = TrainingStudy(vanilla_case()).run(args.run_dir)
-            print(json.dumps({"run_directory": str(args.run_dir), "status": result["status"],
-                              "resume_check_passed": result["resume_check"]["passed"],
-                              "runs": result["runs"], "summary": result["summary"]},
-                             indent=2, sort_keys=True, allow_nan=False))
-            if result["status"] != "completed":
-                parser.exit(1, "Study incomplete; failed or time-limited runs remain in the report.\n")
             return
         if args.command == "train":
             from .training import FBSNNSolver, TrainingConfig, train_and_save
@@ -435,73 +304,55 @@ def main() -> None:
                 "evaluation": result["evaluation"], "targets_met": result["targets_met"],
             }, indent=2, sort_keys=True, allow_nan=False))
             return
-        if args.command == "environment":
-            report = EnvironmentReport.capture().to_json()
-        elif args.command == "autograd":
-            from .autograd_diagnostics import run_autograd_diagnostics
+        from .problems import arithmetic_ten_case, correlated_case, geometric_case, geometric_five_case, vanilla_case
 
-            summary = run_autograd_diagnostics(
-                backend=args.backend, batch_size=args.batch_size, repeats=args.repeats,
-            )
-            report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
+        case = {"vanilla": vanilla_case, "correlated": correlated_case,
+                "geometric": geometric_case, "geometric-five": geometric_five_case,
+                "arithmetic-ten": arithmetic_ten_case}[args.case]()
+        if args.command == "describe":
+            report = case.to_json()
         else:
-            from .problems import arithmetic_ten_case, correlated_case, geometric_case, geometric_five_case, vanilla_case
+            if args.command == "sample":
+                summary = _sampling_summary(args, case)
+            elif args.command == "basket-reference":
+                summary = _basket_reference_summary(args, case)
+            elif args.command == "bsde-diagnostic":
+                summary = _bsde_diagnostic_summary(args, case)
+            elif args.command == "martingale-control":
+                from .martingale import run_known_control_study
 
-            case = {"vanilla": vanilla_case, "correlated": correlated_case,
-                    "geometric": geometric_case, "geometric-five": geometric_five_case,
-                    "arithmetic-ten": arithmetic_ten_case}[args.case]()
-            if args.command == "describe":
-                report = case.to_json()
-            else:
-                if args.command == "sample":
-                    summary = _sampling_summary(args, case)
-                elif args.command == "basket-reference":
-                    summary = _basket_reference_summary(args, case)
-                elif args.command == "bsde-diagnostic":
-                    summary = _bsde_diagnostic_summary(args, case)
-                elif args.command == "martingale-control":
-                    from .martingale import run_known_control_study
-
-                    summary = run_known_control_study(
-                        case, n_paths=args.paths, seed=args.seed, steps=tuple(args.steps),
-                    )
-                    summary["problem"] = json.loads(case.to_json())
-                elif args.command == "bsde-loss":
-                    from .loss_diagnostics import run_loss_diagnostics
-
-                    summary = run_loss_diagnostics(
-                        case, n_paths=args.paths, seed=args.seed, steps=tuple(args.steps),
-                    )
-                else:
-                    from .black_scholes import BlackScholesReference
-                    from .geometric_basket import GeometricBasketReference
-
-                    reference_value = (
-                        GeometricBasketReference(case.model, case.contract).evaluate(case.initial_spots)
-                        if case.contract.basket == "geometric" else
-                        BlackScholesReference(case.model, case.contract).evaluate(case.initial_spots[0])
-                    )
-                    if args.command == "reference":
-                        summary = {
-                            "method": ("geometric_basket" if case.contract.basket == "geometric"
-                                       else "black_scholes"), "case": case.name,
-                            **asdict(reference_value),
-                        }
-                    elif args.command == "monte-carlo":
-                        summary = _monte_carlo_summary(args, case, reference_value)
-                    else:
-                        summary = _finite_difference_summary(args, case, reference_value)
-                report = json.dumps(
-                    summary, indent=2, sort_keys=True, allow_nan=False,
+                summary = run_known_control_study(
+                    case, n_paths=args.paths, seed=args.seed, steps=tuple(args.steps),
                 )
+                summary["problem"] = json.loads(case.to_json())
+            else:
+                from .black_scholes import BlackScholesReference
+                from .geometric_basket import GeometricBasketReference
+
+                reference_value = (
+                    GeometricBasketReference(case.model, case.contract).evaluate(case.initial_spots)
+                    if case.contract.basket == "geometric" else
+                    BlackScholesReference(case.model, case.contract).evaluate(case.initial_spots[0])
+                )
+                if args.command == "reference":
+                    summary = {
+                        "method": ("geometric_basket" if case.contract.basket == "geometric"
+                                   else "black_scholes"), "case": case.name,
+                        **asdict(reference_value),
+                    }
+                elif args.command == "monte-carlo":
+                    summary = _monte_carlo_summary(args, case, reference_value)
+                else:
+                    summary = _finite_difference_summary(args, case, reference_value)
+            report = json.dumps(
+                summary, indent=2, sort_keys=True, allow_nan=False,
+            )
         if args.output is not None:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(report + "\n", encoding="utf-8")
     except (OSError, RuntimeError, ValueError, ArithmeticError) as exc:
         parser.exit(1, f"{args.command.capitalize()} failed: {exc}\n")
     print(report)
-    if args.command in ("autograd", "bsde-loss") and not summary["passed"]:
-        parser.exit(1, f"{args.command.capitalize()} checks failed; inspect the report above.\n")
 
 
 if __name__ == "__main__":

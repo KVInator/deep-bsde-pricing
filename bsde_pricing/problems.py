@@ -311,7 +311,7 @@ def geometric_five_case() -> PricingCase:
 
 
 def arithmetic_ten_case() -> PricingCase:
-    """Equal-weight ten-asset development case with equicorrelation 0.30."""
+    """Equal-weight ten-asset call with equicorrelation 0.30."""
     dimension = 10
     return PricingCase(
         name="arithmetic-ten",

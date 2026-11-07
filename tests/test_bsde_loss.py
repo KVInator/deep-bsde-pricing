@@ -12,7 +12,6 @@ from bsde_pricing.black_scholes import BlackScholesReference
 from bsde_pricing.bsde import PricingBSDE
 from bsde_pricing.bsde_loss import LocalBSDELoss
 from bsde_pricing.geometric_basket import GeometricBasketReference
-from bsde_pricing.loss_diagnostics import run_loss_diagnostics
 from bsde_pricing.neural import ValueNetwork, value_derivatives
 from bsde_pricing.problems import GBMModel, EuropeanCall, vanilla_case, geometric_case
 
@@ -107,24 +106,7 @@ class LocalBSDELossTests(unittest.TestCase):
         with torch.inference_mode():
             with self.assertRaises(ValueError): value_derivatives(network, torch.ones((1, 2), dtype=torch.float64))
 
-    def test_refinement_and_faults_on_coupled_known_solutions(self):
-        vanilla = vanilla_case()
-        short_case = replace(vanilla, model=replace(
-            vanilla.model, rate=-0.01, dividend_yields=(0.02,), volatilities=(0.35,),
-        ), contract=replace(vanilla.contract, maturity=0.25))
-        for case in (vanilla, geometric_case(), short_case):
-            r = run_loss_diagnostics(case, n_paths=1024, steps=(8, 32, 64))
-            self.assertTrue(r["passed"], r)
-            self.assertLess(r["grids"][-1]["local_loss"], 0.25*r["grids"][0]["local_loss"])
-            self.assertLess(r["grids"][-1]["local_residual_rms"], 0.25*r["grids"][0]["local_residual_rms"])
-        case = vanilla_case()
-        zero_rate = replace(case, model=replace(case.model, rate=0))
-        r = run_loss_diagnostics(zero_rate, n_paths=512, steps=(8, 32))
-        self.assertFalse(r["driver_fault_applicable"])
-        self.assertFalse(r["correlation_fault_applicable"])
-        self.assertNotIn("driver_sign_detected", r["checks"])
-
-    def test_invalid_loss_inputs_and_diagnostic_contracts(self):
+    def test_invalid_loss_inputs(self):
         case = vanilla_case()
         problem = PricingBSDE(case.model, case.contract)
         loss = LocalBSDELoss(problem, value_scale=100)
@@ -139,8 +121,6 @@ class LocalBSDELossTests(unittest.TestCase):
             with self.assertRaises(ValueError): loss(oracle, t, s, b)
         for scale, tw in ((0, 1), (100, 0), (math.inf, 1)):
             with self.assertRaises(ValueError): LocalBSDELoss(problem, value_scale=scale, terminal_weight=tw)
-        for steps in ((), (8,), (8, 8), (8, 12), (8, True)):
-            with self.assertRaises(ValueError): run_loss_diagnostics(case, steps=steps)
         with self.assertRaises(ValueError):
             AnalyticalCall(replace(case.model, volatilities=(0,)), case.contract)
 

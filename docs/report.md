@@ -14,7 +14,7 @@ tolerance. One vanilla terminal-loss fit passed both. On the ten-asset
 arithmetic call, antithetic and scrambled Sobol geometric-payoff controls
 were cheaper than either learned formulation at matched precision. The
 [research notebook](../notebooks/deep_bsde_study.ipynb) computes the tables
-and figures from the [retained results](../experiments/results.json).
+and figures from the [retained results](results.json).
 
 ![Initial price and delta errors and matched-precision estimator costs](figures/accuracy_and_cost.png)
 
@@ -118,7 +118,7 @@ price half-width was 0.0005613, the largest scaled-delta half-width was
 standard errors. The price reference for the base ten-asset call was
 6.40618543 with a 95% half-width of 0.0004891. The price and coordinate
 delta references, confidence intervals and agreement diagnostics are in the
-[retained data](../experiments/results.json).
+[retained data](results.json).
 
 ## 3. BSDE formulations and sources of error
 
@@ -209,7 +209,7 @@ Weights are equal. The base grid uses 16 intervals. The additional
 ten-asset grids use 10, 20 and 40 intervals. Four ten-asset stresses change
 the strike to 90 or 110, maturity to 0.25 years, or correlation to 0.80.
 The vanilla and asymmetric geometric cases complete the ten contracts.
-The [design](../experiments/design.json) records the parameters and seeds.
+The [design](../bsde_pricing/design.json) records the parameters and seeds.
 
 The fits use CPU float64, 3,000 Adam updates, batches of 128 fresh paths,
 and learning rate 0.001 reduced to 0.0003 after 70% of the updates. Each
@@ -314,7 +314,7 @@ with at most 32,768 states.
 
 ## 6. Reproduction and scope
 
-The [result file](../experiments/results.json) contains all scheduled
+The [result file](results.json) contains all scheduled
 jobs, reference intervals, per-seed error vectors, estimator allocations
 and runtime metadata. The [notebook](../notebooks/deep_bsde_study.ipynb)
 uses that file for the reported tables and its final figure supplies the
@@ -326,7 +326,7 @@ They use their own seeds and allocations.
 conda activate bsde-pricing
 python -m bsde_pricing experiment-design
 python -m bsde_pricing final-suite --run-dir scratch/runs/final_suite
-python -m experiments.summarize scratch/runs/final_suite/report.json scratch/runs/final_suite/summary.json
+python -m bsde_pricing summarize scratch/runs/final_suite/report.json scratch/runs/final_suite/summary.json
 python -m unittest discover -s tests
 ~~~
 

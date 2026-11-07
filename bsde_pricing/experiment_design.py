@@ -19,7 +19,7 @@ class ExperimentDesign:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "ExperimentDesign":
-        path = Path(__file__).resolve().parent.parent/"experiments/design.json" if path is None else Path(path)
+        path = Path(__file__).with_name("design.json") if path is None else Path(path)
         return cls(json.loads(path.read_text()))
 
     @property

@@ -11,8 +11,10 @@ import numpy as np
 import torch
 
 from bsde_pricing.analytical_torch import AnalyticalCall
-from bsde_pricing.problems import vanilla_case, correlated_case
-from bsde_pricing.training import FBSNNSolver, TrainingConfig, train_and_save
+from bsde_pricing.basket_reference import BasketReferencePricer
+from bsde_pricing.problems import arithmetic_ten_case, correlated_case, vanilla_case
+from bsde_pricing.terminal_bsde import TerminalBSDESolver
+from bsde_pricing.training import FBSNNSolver, PathTrainingConfig, TrainingConfig, train_and_save
 
 
 class TrainingTests(unittest.TestCase):
@@ -170,6 +172,32 @@ class TrainingTests(unittest.TestCase):
             with self.assertRaises(ValueError): TrainingConfig(**kwargs)
         for count in (0, True, 13):
             with self.assertRaises(ValueError): solver.fit(stop_after=count)
+
+    def test_reference_free_fits_selection_and_round_trip(self):
+        case = arithmetic_ten_case()
+        config = PathTrainingConfig(iterations=4, n_steps=4, batch_size=8, width=4,
+                                    log_every=2, validation_paths=8, evaluation_paths=8)
+        value = FBSNNSolver(case, TrainingConfig(**vars(config)))
+        terminal = TerminalBSDESolver(case, config)
+        with patch("bsde_pricing.training.AnalyticalCall", side_effect=AssertionError("No arithmetic oracle")), \
+             patch.object(BasketReferencePricer, "sobol", side_effect=AssertionError("No reference labels")):
+            a, b = value.fit(), terminal.fit()
+        for solver, report, objective in ((value, a, "validation_total"), (terminal, b, "validation_terminal")):
+            self.assertIsNone(solver.reference)
+            self.assertIsNone(report["targets_met"])
+            self.assertIsNone(report["evaluation"]["initial"]["price_error"])
+            self.assertEqual(report["selected_step"], min(report["history"], key=lambda h: h[objective])["step"])
+        self.assertIsNone(value.evaluate(n_paths=8).reference_deltas)
+        self.assertIsNone(terminal.evaluate(n_paths=8).analytical_terminal_residuals)
+        with tempfile.TemporaryDirectory(dir="scratch/tests") as temp:
+            root = Path(temp)
+            value.save(root/"value", a)
+            terminal.save(root/"terminal", b)
+            for model, path in ((value, root/"value/model.pt"), (terminal, root/"terminal/model.pt")):
+                restored = type(model).load(path)
+                self.assertEqual(restored.initial_value(), model.initial_value())
+                for left, right in zip(model.network.parameters(), restored.network.parameters()):
+                    torch.testing.assert_close(left, right, rtol=0, atol=0)
 
 
 if __name__ == '__main__':

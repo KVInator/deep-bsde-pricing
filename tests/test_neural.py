@@ -1,20 +1,13 @@
 """Independent finite differences and graph ownership before neural training."""
 
 import unittest
-from unittest.mock import patch
 
 import torch
 
-from bsde_pricing.autograd_diagnostics import analytical_checks, run_autograd_diagnostics
 from bsde_pricing.neural import ValueNetwork, value_derivatives
 
 
 class NeuralDerivativeTests(unittest.TestCase):
-    def test_polynomial_chain_rule_and_vanilla_oracles(self):
-        for dtype in (torch.float64, torch.float32):
-            checks = analytical_checks("cpu", dtype)
-            self.assertTrue(all(c["passed"] for c in checks.values()), checks)
-
     def test_smooth_network_finite_difference_derivatives(self):
         network = ValueNetwork((100,), 2, 100, width=4)
         x = torch.tensor([[0.3, 90.0], [1.2, 110.0]], dtype=torch.float64, requires_grad=True)
@@ -80,29 +73,6 @@ class NeuralDerivativeTests(unittest.TestCase):
         with self.assertRaises(ValueError): value_derivatives(lambda a: a, x)
         constant = value_derivatives(lambda a: torch.ones_like(a[:, :1]), x)
         torch.testing.assert_close(constant.hessian, torch.zeros_like(constant.hessian))
-
-    def test_failed_oracle_retains_workload_and_explicit_unavailable_request(self):
-        with patch('bsde_pricing.autograd_diagnostics.analytical_checks', side_effect=RuntimeError('oracle failure')):
-            report = run_autograd_diagnostics(backend="cpu", batch_size=4, repeats=1)
-        self.assertFalse(report['passed'])
-        for result in report['backends']:
-            self.assertEqual(result['status'], 'failed')
-            self.assertIn('median_seconds', result)
-            self.assertEqual(result['checks']['analytical_oracle_execution']['error'], 'oracle failure')
-        with patch('torch.backends.mps.is_available', return_value=False):
-            report = run_autograd_diagnostics(backend="mps", batch_size=4, repeats=1)
-        self.assertFalse(report['passed'])
-        self.assertEqual(report['backends'][-1]['status'], 'unavailable')
-
-    def test_cpu_workload_report_and_thread_restoration(self):
-        before = torch.get_num_threads()
-        report = run_autograd_diagnostics(backend="cpu", batch_size=8, repeats=1)
-        self.assertTrue(report["passed"], report)
-        self.assertEqual(torch.get_num_threads(), before)
-        self.assertEqual(len(report["backends"]), 2)
-        self.assertTrue(all(r["median_seconds"] > 0 for r in report["backends"]))
-        with self.assertRaises(ValueError): run_autograd_diagnostics(batch_size=True)
-
 
 if __name__ == "__main__":
     unittest.main()

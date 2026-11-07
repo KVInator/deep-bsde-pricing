@@ -4,20 +4,21 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import platform
 import subprocess
 import sys
 import time
 from collections import Counter
+from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
 
-from .arithmetic_pilot import (
-    WorkerLimitError, _error_assessment, _guarded_worker, _peak_rss_mib,
-    _reference_report, _worker_environment, _write_json,
-)
+from ._workers import WorkerLimitError, _guarded_worker, _peak_rss_mib, _worker_environment, _write_json
+from .basket_reference import BasketReferencePricer
+from .bsde import ControlRecovery, PricingBSDE
 from .experiment_design import ExperimentDesign
 from .geometric_basket import call_reference
 
@@ -45,12 +46,75 @@ def _exact_reference(case) -> dict | None:
     return {"price": stat(result.call_price), "deltas": [stat(value) for value in deltas]}
 
 
+def _reference_report(case, config: dict) -> dict:
+    pricer = BasketReferencePricer(case.model, case.contract)
+    started = time.perf_counter()
+    sobol = pricer.sobol(case.initial_spots, power=config["power"], scrambles=config["scrambles"],
+                         pilot_pairs=config["pilot_pairs"], seed=config["reference_seed"],
+                         chunk_size=config["chunk_size"])
+    level = {"power": config["power"], "seconds": time.perf_counter()-started, **asdict(sobol)}
+    started = time.perf_counter()
+    check = pricer.antithetic(case.initial_spots, n_pairs=config["check_pairs"],
+                              pilot_pairs=config["pilot_pairs"], seed=config["check_seed"], chunk_size=config["chunk_size"])
+    check_seconds = time.perf_counter()-started
+    primary = level["controlled"]
+    half = [_half_width(s) for s in (primary["price"], *primary["deltas"])]
+    weights = np.asarray(case.contract.weights)
+    scaled_half = [None if h is None else h/w for h, w in zip(half[1:], weights)]
+    price_ok = half[0] is not None and half[0] <= config["reference_fraction"]*config["price_target"]
+    delta_ok = all(h is not None and h <= config["reference_fraction"]*config["scaled_delta_target"]
+                   for h in scaled_half)
+    agreement = []
+    for a, b in zip((primary["price"], *primary["deltas"]),
+                    (asdict(check.controlled.price), *(asdict(s) for s in check.controlled.deltas))):
+        se = math.hypot(a["standard_error"], b["standard_error"])
+        difference = a["estimate"]-b["estimate"]
+        agreement.append({"signed_difference": difference, "combined_standard_error": se,
+                          "difference_in_standard_errors": difference/se if se > 0 else None,
+                          "within_four_combined_standard_errors": abs(difference) <= 4*se})
+    return {"sobol_levels": [level], "antithetic_check": {"seconds": check_seconds, **asdict(check)},
+            "primary": primary, "reference_price_half_width": half[0],
+            "reference_scaled_delta_half_widths": scaled_half,
+            "error_budget_met": {"price": price_ok, "all_scaled_deltas": delta_ok},
+            "independent_method_agreement": agreement,
+            "interval_scope": "approximate pointwise 95% intervals",
+            "refinement_scope": "one Sobol allocation and its independent antithetic check"}
+
+
+def _half_width(stat: dict) -> float | None:
+    low, high = stat["confidence_low"], stat["confidence_high"]
+    return None if low is None or high is None else (high-low)/2
+
+
+def _error_assessment(learned: float, stat: dict, target: float, scale: float = 1.0) -> dict:
+    """Propagate reference uncertainty into a signed, optionally scaled error."""
+    error = (learned-stat["estimate"])/scale
+    half = _half_width(stat)
+    if half is None:
+        interval, classification = None, "reference_uncertainty_unavailable"
+    else:
+        half /= scale
+        interval = [error-half, error+half]
+        classification = ("within_target" if abs(error)+half <= target else
+                          "outside_target" if abs(error)-half > target else "unresolved_at_reference_precision")
+    return {"estimate": learned, "reference_estimate": stat["estimate"],
+            "signed_error": error, "signed_error_interval": interval, "scale": scale,
+            "absolute_error_target": target, "classification": classification}
+
+
+def _recovery_summary(recovery: ControlRecovery) -> dict[str, float]:
+    return {"max_absolute_reconstruction_residual": float(np.max(recovery.absolute_residual)),
+            "max_relative_reconstruction_residual": float(np.max(recovery.relative_residual)),
+            "condition_number_min": float(np.min(recovery.condition_number)),
+            "condition_number_max": float(np.max(recovery.condition_number)),
+            "smallest_diffusion_singular_value": float(np.min(recovery.smallest_singular_value)),
+            "largest_inverse_diffusion_norm": float(np.max(recovery.inverse_norm))}
+
+
 def _fit(case, directory: Path, task: dict, spec: dict) -> dict:
     import torch
 
-    from .bsde import PricingBSDE
     from .neural import value_derivatives
-    from .risk_comparison import _recovery_summary
     from .terminal_bsde import TerminalBSDESolver, train_terminal_and_save
     from .training import FBSNNSolver, PathTrainingConfig, TrainingConfig, train_and_save
 
@@ -141,7 +205,7 @@ def _estimator(task: dict, design: ExperimentDesign) -> dict:
     from .training import FBSNNSolver
 
     torch.set_num_threads(1)
-    solvers, checkpoints, seconds = [], {}, {}
+    solvers, seconds = [], {}
     for name, loader in (("value_gradient", FBSNNSolver), ("terminal_loss", TerminalBSDESolver)):
         started = time.perf_counter()
         path = Path(task["checkpoints"][name])
@@ -149,10 +213,9 @@ def _estimator(task: dict, design: ExperimentDesign) -> dict:
         if _digest(path) != source["checkpoint_sha256"]:
             raise ValueError("Estimator checkpoint digest differs from the final fit.")
         solvers.append(loader.load(path))
-        checkpoints[name] = source
         seconds[name] = time.perf_counter()-started
     frozen = FrozenControls(*solvers)
-    study = ControlCostStudy(design, frozen, checkpoints, task["reference"]["price"], None, seconds)
+    study = ControlCostStudy(design, frozen)
     key = (task["seed"], task["repetition"])
     pilot = np.random.SeedSequence(task["pilot_seed"], spawn_key=key)
     evaluation, antithetic, sobol = np.random.SeedSequence(task["evaluation_seed"], spawn_key=key).spawn(3)
@@ -263,7 +326,7 @@ class FinalSuite:
             streams = self.spec["final_streams"]
             for level, (power, pairs) in enumerate(zip(settings["sobol_powers"], settings["check_pairs"])):
                 entry = row["levels"][level]
-                config = {"powers": [power], "coarse_power": power-1, "reference_power": power,
+                config = {"power": power,
                           "scrambles": settings["scrambles"], "pilot_pairs": settings["pilot_pairs"],
                           "check_pairs": pairs, "reference_seed": streams["reference_seed_base"]+index,
                           "check_seed": streams["independent_check_seed_base"]+index,
@@ -317,7 +380,7 @@ class FinalSuite:
                      for kind, r in fits.items()}
             task = {"kind": "estimator", "case": name, "seed": seed, "repetition": repeat,
                     "checkpoints": paths, "sources": {k: r["result"] for k, r in fits.items()},
-                    "reference": reference["primary"], "pilot_seed": streams["coefficient_pilot_seed_base"]+index,
+                    "pilot_seed": streams["coefficient_pilot_seed_base"]+index,
                     "evaluation_seed": streams["estimator_evaluation_seed_base"]+index}
             self._execute(row, Path("estimators")/str(seed)/str(repeat+1), task,
                           self.resources["worker_wall_seconds"])
