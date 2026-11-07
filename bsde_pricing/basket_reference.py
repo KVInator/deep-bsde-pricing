@@ -99,7 +99,7 @@ class BasketReferencePricer:
         if self.model.dimension != self.contract.dimension:
             raise ValueError("Model and contract dimensions must agree.")
 
-    def _setup(self, spots, time, seed, pilot_pairs, branch, children):
+    def _setup(self, spots, time, seed, pilot_pairs, branch, children, *, price_only=False):
         spots = np.array(_finite_vector(spots, "initial_spots"))
         if len(spots) != self.model.dimension or np.any(spots <= 0):
             raise ValueError("initial_spots must be positive and match the model dimension.")
@@ -113,9 +113,11 @@ class BasketReferencePricer:
         tau = self.contract.maturity - time
         geometric = replace(self.contract, basket="geometric")
         reference = GeometricBasketReference(self.model, geometric).evaluate(spots, time)
-        known = np.array((reference.call_price, *reference.call_deltas), dtype=np.float64)
+        known = np.array((reference.call_price,) if price_only else
+                         (reference.call_price, *reference.call_deltas), dtype=np.float64)
         streams = np.random.SeedSequence(seed, spawn_key=(branch,)).spawn(children)
-        pilot_x, pilot_y = self._pairs(spots, tau, pilot_pairs, np.random.default_rng(streams[0]))
+        pilot_x, pilot_y = self._pairs(spots, tau, pilot_pairs, np.random.default_rng(streams[0]),
+                                      price_only=price_only)
         x = pilot_x - pilot_x.mean(axis=0)
         y = pilot_y - pilot_y.mean(axis=0)
         with np.errstate(over="raise", invalid="raise", divide="raise"):
@@ -129,7 +131,8 @@ class BasketReferencePricer:
         return spots, time, tau, seed, pilot_pairs, streams, known, beta, missing
 
     def _contributions(
-        self, spots: NDArray[np.float64], tau: float, normals: NDArray[np.float64],
+        self, spots: NDArray[np.float64], tau: float, normals: NDArray[np.float64], *,
+        price_only: bool = False,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         terminal = self.model.terminal_from_normals(spots, tau, normals)
         discount = math.exp(-self.model.rate * tau)
@@ -137,22 +140,27 @@ class BasketReferencePricer:
             raise ValueError("Discount factor is outside the supported numerical range.")
         geometric = replace(self.contract, basket="geometric")
         with np.errstate(over="raise", under="raise", invalid="raise", divide="raise"):
+            target_price = discount * self.contract.payoff(terminal)
+            control_price = discount * geometric.payoff(terminal)
+            if price_only:
+                return target_price[:, None], control_price[:, None]
             basket = self.contract.basket_value(terminal)
             geo = geometric.basket_value(terminal)
             weights = np.array(self.contract.weights)
             scale = (terminal if self.contract.basket == "arithmetic" else basket[:, None])
             target_delta = discount * (basket > self.contract.strike)[:, None] * weights * scale / spots
             control_delta = discount * (geo > self.contract.strike)[:, None] * weights * geo[:, None] / spots
-            target = np.column_stack((discount * self.contract.payoff(terminal), target_delta))
-            control = np.column_stack((discount * geometric.payoff(terminal), control_delta))
+            target = np.column_stack((target_price, target_delta))
+            control = np.column_stack((control_price, control_delta))
         return target, control
 
     def _pairs(
-        self, spots: NDArray[np.float64], tau: float, count: int, rng: np.random.Generator,
+        self, spots: NDArray[np.float64], tau: float, count: int, rng: np.random.Generator, *,
+        price_only: bool = False,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         normals = rng.standard_normal((count, self.model.dimension))
-        plus, plus_control = self._contributions(spots, tau, normals)
-        minus, minus_control = self._contributions(spots, tau, -normals)
+        plus, plus_control = self._contributions(spots, tau, normals, price_only=price_only)
+        minus, minus_control = self._contributions(spots, tau, -normals, price_only=price_only)
         return (plus + minus) / 2, (plus_control + minus_control) / 2
 
     def antithetic(
@@ -197,27 +205,30 @@ class BasketReferencePricer:
                 raise ValueError("Sobol chunk_size must be a power of two.")
         setup = self._setup(initial_spots, time, seed, pilot_pairs, 1, scrambles + 1)
         spots, time, tau, seed, pilot_pairs, streams, known, beta, missing = setup
+        plain, adjusted = self._sobol_means(spots, tau, power, streams[1:], known, beta, chunk_size)
+        return self._result("scrambled_sobol_geometric_control", spots, time, tau, seed, 1,
+            pilot_pairs, plain, adjusted, known, beta, missing, scrambles * 2**power, 2**power)
+
+    def _sobol_means(self, spots, tau, power, streams, known, beta, chunk_size, *, price_only=False):
         plain, adjusted = [], []
-        for stream in streams[1:]:
+        for stream in streams:
             engine = qmc.Sobol(self.model.dimension, scramble=True, bits=52,
                                rng=np.random.default_rng(stream))
             size = 2**power if chunk_size is None else min(chunk_size, 2**power)
-            sums = np.zeros(self.model.dimension+1)
+            sums = np.zeros_like(known)
             control_sums = np.zeros_like(sums)
             for start in range(0, 2**power, size):
                 uniforms = engine.random_base2(int(math.log2(size))) if start == 0 else engine.random(size)
                 if np.any((uniforms <= 0) | (uniforms >= 1)):
                     raise ArithmeticError("A Sobol endpoint cannot be mapped to a finite normal; no clipping applied.")
-                target, control = self._contributions(spots, tau, ndtri(uniforms))
+                target, control = self._contributions(spots, tau, ndtri(uniforms), price_only=price_only)
                 sums += target.sum(axis=0)
                 control_sums += control.sum(axis=0)
             means = sums/2**power
             plain.append(means)
             with np.errstate(over="raise", invalid="raise"):
                 adjusted.append(means - beta * (control_sums/2**power - known))
-        return self._result("scrambled_sobol_geometric_control", spots, time, tau, seed, 1,
-            pilot_pairs, np.array(plain), np.array(adjusted), known, beta, missing,
-            scrambles * 2**power, 2**power)
+        return np.array(plain), np.array(adjusted)
 
     def _result(self, method, spots, time, tau, seed, branch, pilot_pairs, plain,
                 adjusted, known, beta, missing, evaluation_states, points):

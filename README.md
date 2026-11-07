@@ -144,6 +144,14 @@ python -m bsde_pricing learned-control --output scratch/runs/martingale_learned.
 
 The command reads the validation-selected models and price reference from the completed arithmetic pilot. It evaluates both frozen controls on fresh antithetic pairs, fits coefficients on separate pairs and compares standard errors with geometric payoff controls. Use `--pilot-dir` to select a different location for the same declared pilot. See the [arithmetic-basket comparison](docs/methodology.md#frozen-learned-controls-on-arithmetic-ten).
 
+## Matched-precision costs
+
+```bash
+python -m bsde_pricing control-cost --output scratch/runs/control_cost.json
+```
+
+The benchmark runs the three declared allocations with 16 independent repetitions and reuses the completed arithmetic pilot. It compares price uncertainty and total cost for the fixed contract, including checkpoint training, coefficient fitting and evaluation. See [precision against total cost](docs/methodology.md#precision-against-total-cost).
+
 ## Experiment design
 
 ```bash

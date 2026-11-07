@@ -2289,3 +2289,39 @@ The command reads the completed arithmetic pilot under `scratch/runs/arithmetic_
 The macOS ARM64 run used Python 3.12.16, NumPy 2.5.4, SciPy 1.18.1 and PyTorch 2.15.0. All 113 tests passed in 35.107 seconds with UserWarnings treated as errors. The eight estimates and standard errors match the x86-64 report within 1e-14 price units. Value-gradient with a fitted coefficient and terminal loss with a unit coefficient retain variance factors of 8.05 and 7.08. The geometric payoff controls have the lowest standard errors at this allocation.
 
 The [ARM64 notebook run](https://github.com/KVInator/deep-bsde-pricing/commit/5d18db883b6866852e4f040232dcaf6d439d32b6) contains seven consecutively executed code cells and six tables matching the reports. The published sampling-uncertainty figure uses that report with minor log-axis ticks disabled to prevent overlapping labels.
+
+## Precision against total cost
+
+The development benchmark uses the validation-selected seed-2026 arithmetic-ten checkpoints on the 16-step grid. The declared allocations are 4,096, 16,384 and 65,536 antithetic pairs. Each has 16 independent repetitions. Each repetition draws a separate 4,096-pair coefficient pilot and fresh evaluation paths. The martingale methods share their evaluation draws and use nested prefixes across allocations. The terminal-payoff estimators simulate only the terminal state and omit pathwise deltas. Sobol uses 16 independently scrambled nets of 512, 2,048 or 8,192 points to match each antithetic allocation's terminal-state count.
+
+The comparison targets 95% interval half-widths of 0.025 and 0.01 price units. It selects the smallest measured allocation whose interval meets the target in every repetition. The antithetic interval uses independent pair means. The Sobol interval uses the Student-t critical value and independent scramble means. The repeated estimates also give an empirical price standard deviation and RMSE against the independently checked pilot reference. Interval width measures sampling precision, while the reference comparison measures realised price error.
+
+For \(Q\) fresh estimates of the same contract at the same initial state, the cost model is
+
+\[
+C(Q)=C_{\mathrm{train}}+C_{\mathrm{setup}}+C_{\mathrm{tune}}+C_{\mathrm{pilot}}+Q\,C_{\mathrm{eval}}.
+\]
+
+Training uses the elapsed cost recorded with the selected checkpoint. Setup includes validation and loading of the relevant checkpoint. Additional tuning costs are zero under the fixed architecture and validation rule. Pilot and evaluation costs are medians across the repetitions. The unit controls require no fitted coefficient. Learned and conventional fitted controls both reuse their independently fitted coefficient across the modelled queries. The 16 measured repetitions each use a new pilot to capture coefficient variability. The timings share a resident Python process and exclude report generation, plotting and the independent price reference. The study treats recorded training as an upfront cost and excludes prior research exploration.
+
+For each qualified allocation, the first positive query count with a sustained cost advantage follows from comparing the two affine cost functions. If the learned method has a higher marginal evaluation cost and a higher upfront cost, there is no break-even. A target miss remains explicit when all measured allocations fail the half-width criterion.
+
+### Development results
+
+| Method | States at 0.025 | One estimate (s) | 100 estimates (s) | States at 0.01 | One estimate at 0.01 (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Antithetic geometric payoff | 8,192 | 0.0072 | 0.3326 | 32,768 | 0.0166 |
+| Scrambled Sobol geometric payoff | 8,192 | 0.0585 | 5.3978 | 32,768 | 0.0677 |
+| Geometric integral proxy | 32,768 | 1.7603 | 176.0332 | 131,072 | 6.7537 |
+| Value-gradient, unit | 131,072 | 44.3819 | 1,432.0290 | Missed | — |
+| Value-gradient, fitted | 32,768 | 34.7509 | 381.9242 | Missed | — |
+| Terminal loss, unit | 32,768 | 45.3383 | 211.1305 | Missed | — |
+| Terminal loss, fitted | 32,768 | 45.7512 | 211.5434 | Missed | — |
+
+At half-width 0.025, every learned variant qualifies and has higher marginal evaluation cost than both conventional controls. The fitted value-gradient model has the lowest learned one-off cost. Unit terminal loss has the lowest learned cost over 100 estimates. Neither has a break-even against the geometric payoff baselines. At half-width 0.01, the best learned maximum half-width is 0.01120 at 131,072 states. The smallest Sobol allocation has median half-width 0.00786 and maximum 0.01063, so it qualifies at the next measured allocation under the all-repetitions rule.
+
+The 336 estimate rows took 472.12 seconds on Linux x86-64 with Python 3.12.14, NumPy 2.3.5, SciPy 1.17.0 and PyTorch 2.15.0+cpu. [Control variates](../notebooks/04_control_variates.ipynb) shows every allocation, the 16-estimate workloads and the cost curves. The report retains each repetition's interval, fitted coefficient and measured costs.
+
+```bash
+python -m bsde_pricing control-cost --output scratch/runs/control_cost.json
+```

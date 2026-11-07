@@ -49,6 +49,17 @@ class FrozenControls:
         # The checkpoint output already incorporates the discount convention.
         return self.terminal.network.discounted_control_at(step, torch.tensor(spots)).numpy()
 
+    def geometric_proxy(self) -> DiscountedControl:
+        proxy = GeometricBasketReference(
+            self.problem.model, replace(self.problem.contract, basket="geometric"),
+        )
+
+        def control(t: float, spots: np.ndarray) -> np.ndarray:
+            delta = proxy.call_delta_array(spots, t)
+            return math.exp(-self.problem.model.rate*t)*self.problem.control(spots, delta)
+
+        return control
+
 
 def _pair_samples(
     estimator: MartingaleEstimator, positive: np.ndarray,
@@ -91,10 +102,9 @@ def _method_row(
     }
 
 
-def run_learned_control_study(pilot_directory: Path) -> dict:
-    """Run the first declared allocation with one validation-selected development pair."""
+def _load_frozen_pilot(pilot_directory: Path, design: ExperimentDesign):
+    """Load the validated checkpoints, reference and per-model setup costs."""
     started = time.perf_counter()
-    design = ExperimentDesign.load()
     spec = design.data
     protocol = spec["estimators"]
     case = design.case(protocol["reference_case"])
@@ -113,8 +123,10 @@ def run_learned_control_study(pilot_directory: Path) -> dict:
     training = dict(spec["training"])
     training["n_steps"] = training.pop("base_steps")
     training["seed"] = seed
-    checkpoints, solvers = {}, []
+    common_seconds = time.perf_counter()-started
+    checkpoints, solvers, load_seconds = {}, [], {}
     for name, solver_type in (("value_gradient", FBSNNSolver), ("terminal_loss", TerminalBSDESolver)):
+        begin = time.perf_counter()
         checkpoint = path/name/"model.pt"
         source = pilot["models"][name]["source"]
         if hashlib.sha256(checkpoint.read_bytes()).hexdigest() != source["model_sha256"]:
@@ -129,7 +141,20 @@ def run_learned_control_study(pilot_directory: Path) -> dict:
             raise ValueError(f"{name} checkpoint does not match the declared development fit.")
         checkpoints[name] = source
         solvers.append(solver)
+        load_seconds[name] = common_seconds+time.perf_counter()-begin
     frozen = FrozenControls(*solvers)
+    return frozen, checkpoints, reference, hashlib.sha256(report_bytes).hexdigest(), load_seconds
+
+
+def run_learned_control_study(pilot_directory: Path) -> dict:
+    """Run the first declared allocation with one validation-selected development pair."""
+    started = time.perf_counter()
+    design = ExperimentDesign.load()
+    spec = design.data
+    protocol = spec["estimators"]
+    case = design.case(protocol["reference_case"])
+    seed = spec["development_seeds"][0]
+    frozen, checkpoints, reference, report_sha, _ = _load_frozen_pilot(pilot_directory, design)
     setup_seconds = time.perf_counter()-started
 
     n_pairs = protocol["antithetic_pairs"][0]
@@ -146,11 +171,7 @@ def run_learned_control_study(pilot_directory: Path) -> dict:
     increments_scale = math.sqrt(frozen.dt)
     estimator = MartingaleEstimator(case)
     pricer = BasketReferencePricer(case.model, case.contract)
-    proxy = GeometricBasketReference(case.model, replace(case.contract, basket="geometric"))
-
-    def analytical_proxy(t: float, spots: np.ndarray) -> np.ndarray:
-        delta = proxy.call_delta_array(spots, t)
-        return math.exp(-case.model.rate*t)*frozen.problem.control(spots, delta)
+    analytical_proxy = frozen.geometric_proxy()
 
     def draw(count: int, stream: np.random.SeedSequence) -> tuple[np.ndarray, float]:
         start = time.perf_counter()
@@ -214,7 +235,7 @@ def run_learned_control_study(pilot_directory: Path) -> dict:
 
     return {
         "method": "development_learned_martingale_controls", "case": json.loads(case.to_json()),
-        "specification_sha256": design.sha256, "pilot_report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "specification_sha256": design.sha256, "pilot_report_sha256": report_sha,
         "seed": seed, "spawn_keys": [list(stream.spawn_key) for stream in streams],
         "conventional_seeds": conventional_seeds, "steps": frozen.steps, "evaluation_pairs": n_pairs,
         "evaluation_states_per_method": evaluation_states, "coefficient_pilot_pairs": pilot_pairs,
