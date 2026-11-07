@@ -211,6 +211,10 @@ def main() -> None:
     martingale.add_argument("--paths", type=int, default=16_384)
     martingale.add_argument("--seed", type=int, default=2026)
     martingale.add_argument("--steps", type=int, nargs="+", default=(4, 8, 16, 32, 64))
+    learned = commands.add_parser(
+        "learned-control", help="compare frozen arithmetic-pilot controls with conventional estimates",
+    )
+    learned.add_argument("--pilot-dir", type=Path, default=Path("scratch/runs/arithmetic_ten_pilot"))
     autograd = commands.add_parser("autograd", help="check physical derivatives and CPU/MPS workloads")
     autograd.add_argument("--backend", choices=("auto", "cpu", "mps"), default="auto")
     autograd.add_argument("--batch-size", type=int, default=256)
@@ -259,13 +263,23 @@ def main() -> None:
     stress_study.add_argument("--geometric-value", type=Path, default=Path("scratch/runs/geometric_five_fbsnn"))
     stress_study.add_argument("--geometric-terminal", type=Path, default=Path("scratch/runs/geometric_five_terminal_bsde"))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
-                    basket_reference, bsde_diagnostic, martingale, autograd, bsde_loss, design):
+                    basket_reference, bsde_diagnostic, martingale, learned, autograd, bsde_loss, design):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
     args = parser.parse_args()
 
     try:
+        if args.command == "learned-control":
+            from .learned_control import run_learned_control_study
+
+            summary = run_learned_control_study(args.pilot_dir)
+            report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(report+"\n", encoding="utf-8")
+            print(report)
+            return
         if args.command == "stress-study":
             from .greek_study import GreekStressStudy
 

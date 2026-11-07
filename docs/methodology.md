@@ -2250,3 +2250,36 @@ The reports retain the grid estimates, sample variances, standard errors, contro
 The macOS ARM64 run used Python 3.12.16, NumPy 2.5.4 and SciPy 1.18.1. All 110 tests passed in 33.887 seconds with UserWarnings treated as errors. Both 16,384-path reports match the workspace estimates and diagnostics to floating-point precision across all five grids. The 64-interval variance ratios are 187.88 for vanilla and 165.85 for geometric five. The eight-interval geometric estimate again lies 2.06 standard errors above the exact price.
 
 The [executed notebook at 94901d0](https://github.com/KVInator/deep-bsde-pricing/commit/94901d05768c34a766f826956a621fe2353c7a16) contains four consecutively executed code cells, three tables and one figure. The source matches the implementation notebook, the tables match the MacBook reports, and the saved outputs contain no execution errors.
+
+## Frozen learned controls on arithmetic ten
+
+For an antithetic pair, let \(X\) be the mean discounted payoff and \(I\) the mean of the two discrete stochastic integrals. Each path has a predictable control, so each integral has zero expectation even though the two paths are dependent. For an independently fitted \(\widehat\beta\), the evaluation mean of \(X-\widehat\beta I\), conditional on the frozen model and coefficient pilot, still targets the arithmetic call price. The population coefficient for pair means is \(\operatorname{Cov}(X,I)/\operatorname{Var}(I)\). An imperfect control or a poorly estimated coefficient can increase variance.
+
+The estimator loads the two validation-selected inference checkpoints from the arithmetic pilot and checks their digests, financial case and training configuration. The value-gradient control uses the spot gradient, the pricing diffusion map and left-endpoint discounting. The terminal-loss control uses the checkpoint's discounted output at the corresponding step. Both networks are in evaluation mode with frozen parameters. The geometric integral proxy applies the analytical geometric-basket control to the arithmetic payoff on the same grid. Its terminal-payoff analogue uses the geometric payoff and its exact expectation.
+
+The development comparison uses the first declared allocation, one checkpoint pair at seed 2026 and the existing 16-step grid. The selected updates are 3,000 for value-gradient and 2,900 for terminal loss. A separate 4,096-pair pilot fits each learned coefficient from pair-mean covariances. The evaluation uses another 4,096 pairs shared across the plain and martingale estimates, with both the unit and fitted coefficients reported. Conventional geometric payoff controls use their own coefficient pilots and evaluation streams. The Sobol estimate uses 16 independent scrambles of 512 points, matching the 8,192 evaluation states of each antithetic method. The development seed branches are recorded in the report.
+
+### Development results
+
+The pilot's independently checked reference is 6.40618406 with standard error 0.00016980. The reported differences from this reference use combined standard errors. Antithetic intervals use pair means and the Sobol interval uses a Student-t critical value on scramble means. The variance factor compares estimated **estimator variances**, the squares of their standard errors, at equal evaluation state counts.
+
+| Method | Coefficient | Price | Price SE | Variance factor | Measured seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Plain antithetic | 0.00000 | 6.403511 | 0.063823 | 1.00 | 0.030 |
+| Geometric integral proxy | 1.00000 | 6.419222 | 0.018043 | 12.51 | 0.524 |
+| Value-gradient, unit | 1.00000 | 6.413936 | 0.025944 | 6.05 | 1.208 |
+| Value-gradient, fitted | 1.29263 | 6.416987 | 0.022489 | 8.05 | 2.225 |
+| Terminal loss, unit | 1.00000 | 6.398313 | 0.023986 | 7.08 | 0.452 |
+| Terminal loss, fitted | 1.02319 | 6.398193 | 0.023991 | 7.08 | 0.856 |
+| Antithetic geometric payoff | 0.99202 | 6.408360 | 0.006729 | 89.96 | 0.026 |
+| Scrambled Sobol geometric payoff | 0.99312 | 6.410675 | 0.002803 | 518.26 | 0.076 |
+
+The value-gradient coefficient fit lowers its estimated variance by about 25% relative to its unit-coefficient estimate. The terminal-loss fit increases estimated variance by 0.039% relative to its unit-coefficient estimate. Both learned controls reduce variance versus plain antithetic sampling and both geometric payoff methods deliver lower standard errors. Across the three martingale controls, the largest absolute integral mean is 0.26 standard errors from zero. All price differences from the independent reference are within 1.60 combined standard errors.
+
+The timing column includes the coefficient pilot for fitted methods and the existing price and delta evaluation for conventional methods. It records one observed run on Linux x86-64 with Python 3.12.14, NumPy 2.3.5, SciPy 1.17.0 and PyTorch 2.15.0+cpu. Checkpoint setup and recorded training costs are separate fields. Matched-precision cost and training amortisation are assessed over repeated allocations.
+
+```bash
+python -m bsde_pricing learned-control --output scratch/runs/martingale_learned.json
+```
+
+The command reads the completed arithmetic pilot under `scratch/runs/arithmetic_ten_pilot`. [Control variates](../notebooks/04_control_variates.ipynb) displays the saved prices, intervals and variance factors.

@@ -136,6 +136,14 @@ python -m bsde_pricing martingale-control --case geometric-five --output scratch
 
 Both calls compare ordinary IID payoff Monte Carlo with the analytical Brownian control on shared paths and nested time grids. The reports include price uncertainty, sample variance reduction and an Itô-isometry check. [Control variates](notebooks/04_control_variates.ipynb) displays the saved results. See the [estimator derivation and verification](docs/methodology.md#known-control-martingale-estimator).
 
+## Learned martingale controls
+
+```bash
+python -m bsde_pricing learned-control --output scratch/runs/martingale_learned.json
+```
+
+The command reads the validation-selected models and price reference from the completed arithmetic pilot. It evaluates both frozen controls on fresh antithetic pairs, fits coefficients on separate pairs and compares standard errors with geometric payoff controls. Use `--pilot-dir` to select a different location for the same declared pilot. See the [arithmetic-basket comparison](docs/methodology.md#frozen-learned-controls-on-arithmetic-ten).
+
 ## Experiment design
 
 ```bash

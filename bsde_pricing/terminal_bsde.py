@@ -51,10 +51,20 @@ class TerminalControlNetwork(nn.Module):
                 or states.shape[0] < 1 or states.shape[1:] != (self.n_steps+1, self.dimension)
                 or states.requires_grad or not bool(torch.isfinite(states).all()) or bool((states <= 0).any())):
             raise ValueError("States must be fixed positive CPU float64 data with shape (N,M+1,d).")
-        controls = [self.initial_control.expand(states.shape[0], self.dimension)]
-        controls.extend(layer(states[:, step]/self.spot_scale-1)
-                        for step, layer in enumerate(self.layers, start=1))
-        return torch.stack(controls, dim=1)*self.control_scale
+        return torch.stack([
+            self._unscaled_control_at(step, states[:, step]) for step in range(self.n_steps)
+        ], dim=1)*self.control_scale
+
+    def discounted_control_at(self, step: int, spots: torch.Tensor) -> torch.Tensor:
+        """Evaluate one left endpoint on CPU float64 spot rows."""
+        if not 0 <= step < self.n_steps:
+            raise ValueError("Control step must precede maturity on the checkpoint grid.")
+        return self._unscaled_control_at(step, spots)*self.control_scale
+
+    def _unscaled_control_at(self, step: int, spots: torch.Tensor) -> torch.Tensor:
+        if step == 0:
+            return self.initial_control.expand(spots.shape[0], self.dimension)
+        return self.layers[step-1](spots/self.spot_scale-1)
 
     def forward(self, states: torch.Tensor, increments: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         controls = self.discounted_controls(states)
