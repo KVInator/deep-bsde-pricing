@@ -2325,3 +2325,11 @@ The 336 estimate rows took 472.12 seconds on Linux x86-64 with Python 3.12.14, N
 ```bash
 python -m bsde_pricing control-cost --output scratch/runs/control_cost.json
 ```
+
+### ARM64 reproduction
+
+The macOS ARM64 benchmark completed in 145.35 seconds. All 115 tests passed in 35.130 seconds with UserWarnings treated as errors. The 336 estimate rows agree with the x86-64 prices and uncertainty summaries to floating-point precision. Every precision decision and break-even outcome reproduces.
+
+At half-width 0.025, the measured one-estimate costs are 0.0035 seconds for antithetic geometric payoff, 0.0208 seconds for scrambled Sobol geometric payoff and 10.2222 seconds for the fastest learned variant, fitted value-gradient. Over 100 estimates, antithetic geometric payoff costs 0.1561 seconds and the lowest learned cost is 69.3978 seconds for unit terminal loss. Neither learned formulation qualifies at half-width 0.01. Both conventional estimators qualify at 32,768 terminal states.
+
+The [executed ARM64 notebook](https://github.com/KVInator/deep-bsde-pricing/commit/097bdfa867d6b9f33101816558bad96b20209d86) retains ten consecutive code executions, nine tables and three figures. The three cost tables match the benchmark report.
