@@ -2283,3 +2283,9 @@ python -m bsde_pricing learned-control --output scratch/runs/martingale_learned.
 ```
 
 The command reads the completed arithmetic pilot under `scratch/runs/arithmetic_ten_pilot`. [Control variates](../notebooks/04_control_variates.ipynb) displays the saved prices, intervals and variance factors.
+
+### ARM64 reproduction
+
+The macOS ARM64 run used Python 3.12.16, NumPy 2.5.4, SciPy 1.18.1 and PyTorch 2.15.0. All 113 tests passed in 35.107 seconds with UserWarnings treated as errors. The eight estimates and standard errors match the x86-64 report within 1e-14 price units. Value-gradient with a fitted coefficient and terminal loss with a unit coefficient retain variance factors of 8.05 and 7.08. The geometric payoff controls have the lowest standard errors at this allocation.
+
+The [ARM64 notebook run](https://github.com/KVInator/deep-bsde-pricing/commit/5d18db883b6866852e4f040232dcaf6d439d32b6) contains seven consecutively executed code cells and six tables matching the reports. The published sampling-uncertainty figure uses that report with minor log-axis ticks disabled to prevent overlapping labels.
