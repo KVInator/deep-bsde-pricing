@@ -219,6 +219,8 @@ def main() -> None:
         "control-cost", help="measure repeated fixed-contract estimates at matched precision",
     )
     costs.add_argument("--pilot-dir", type=Path, default=Path("scratch/runs/arithmetic_ten_pilot"))
+    final_suite = commands.add_parser("final-suite", help="execute or resume the locked confirmatory suite")
+    final_suite.add_argument("--run-dir", type=Path, default=Path("scratch/runs/final_suite"))
     autograd = commands.add_parser("autograd", help="check physical derivatives and CPU/MPS workloads")
     autograd.add_argument("--backend", choices=("auto", "cpu", "mps"), default="auto")
     autograd.add_argument("--batch-size", type=int, default=256)
@@ -274,6 +276,12 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        if args.command == "final-suite":
+            from .final_suite import FinalSuite
+
+            summary = FinalSuite(args.run_dir).run()
+            print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
+            return
         if args.command in ("learned-control", "control-cost"):
             if args.command == "learned-control":
                 from .learned_control import run_learned_control_study
@@ -283,7 +291,7 @@ def main() -> None:
                 from .control_cost import ControlCostStudy
                 from .experiment_design import ExperimentDesign
 
-                summary = ControlCostStudy(args.pilot_dir, ExperimentDesign.load()).run()
+                summary = ControlCostStudy.from_pilot(args.pilot_dir, ExperimentDesign.load()).run()
             report = json.dumps(summary, indent=2, sort_keys=True, allow_nan=False)
             if args.output is not None:
                 args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -85,7 +85,11 @@ def _matched_precision(allocations: list[dict], fixed_costs: dict, repetitions: 
 class ControlCostStudy:
     """Measure nested allocations on independent development repetitions."""
 
-    def __init__(self, pilot_directory: Path, design: ExperimentDesign):
+    @classmethod
+    def from_pilot(cls, pilot_directory: Path, design: ExperimentDesign):
+        return cls(design, *_load_frozen_pilot(pilot_directory, design))
+
+    def __init__(self, design: ExperimentDesign, frozen, checkpoints, reference, pilot_sha, load_seconds):
         self.design = design
         spec = design.data
         protocol = spec["estimators"]
@@ -105,9 +109,8 @@ class ControlCostStudy:
             if remainder or points < 2 or points & (points-1):
                 raise ValueError("Each allocation must match a power of two per Sobol scramble.")
             self.powers[count] = points.bit_length()-1
-        self.frozen, self.checkpoints, self.reference, self.pilot_sha, self.load_seconds = (
-            _load_frozen_pilot(pilot_directory, design)
-        )
+        self.frozen, self.checkpoints, self.reference = frozen, checkpoints, reference
+        self.pilot_sha, self.load_seconds = pilot_sha, load_seconds
         self.estimator = MartingaleEstimator(self.case)
         self.pricer = BasketReferencePricer(self.case.model, self.case.contract)
         self.controls = {"analytical_geometric_proxy": self.frozen.geometric_proxy(),
@@ -173,6 +176,12 @@ class ControlCostStudy:
                 row["degenerate_pilot"] = bool(missing)
                 rows[count][CONVENTIONAL[branch]] = row
 
+    def repetition(self, pilot, evaluation, antithetic, sobol) -> dict:
+        rows = {n: {} for n in self.counts}
+        self._martingale_rows(rows, pilot, evaluation)
+        self._conventional_rows(rows, antithetic, sobol)
+        return rows
+
     def run(self) -> dict:
         start = time.perf_counter()
         records = {n: [] for n in self.counts}
@@ -181,15 +190,25 @@ class ControlCostStudy:
             torch.set_num_threads(1)
             streams = np.random.SeedSequence(self.seed, spawn_key=(27,)).spawn(self.repetitions)
             for stream in streams:
-                rows = {n: {} for n in self.counts}
-                pilot, evaluation, anti, sobol = stream.spawn(4)
-                self._martingale_rows(rows, pilot, evaluation)
-                self._conventional_rows(rows, anti, sobol)
-                for count, methods in rows.items():
+                for count, methods in self.repetition(*stream.spawn(4)).items():
                     records[count].append({"spawn_key": list(stream.spawn_key), "methods": methods})
         finally:
             torch.set_num_threads(threads)
 
+        allocations, fixed, matched = self.summarise(records)
+        return {
+            "method": "development_control_cost_study", "case": self.case.name,
+            "specification_sha256": self.design.sha256, "pilot_report_sha256": self.pilot_sha,
+            "development_seed": self.seed, "steps": self.frozen.steps, "repetitions": self.repetitions,
+            "pilot_pairs": self.pilot_pairs, "scrambles": self.scrambles, "reference": self.reference,
+            "checkpoints": self.checkpoints, "fixed_costs": fixed, "allocations": allocations,
+            "matched_precision": matched,
+            "wall_seconds": time.perf_counter()-start,
+            "runtime": {"python": platform.python_version(), "system": platform.platform(),
+                        "numpy": np.__version__, "scipy": scipy.__version__, "torch": torch.__version__},
+        }
+
+    def summarise(self, records):
         allocations = []
         for count, repeats in records.items():
             methods = {name: _summarise([r["methods"][name] for r in repeats], self.reference["estimate"])
@@ -204,14 +223,4 @@ class ControlCostStudy:
                 "additional_tuning_seconds": 0.0,
                 "checkpoint_setup_seconds": self.load_seconds.get(kind, 0.0),
             }
-        return {
-            "method": "development_control_cost_study", "case": self.case.name,
-            "specification_sha256": self.design.sha256, "pilot_report_sha256": self.pilot_sha,
-            "development_seed": self.seed, "steps": self.frozen.steps, "repetitions": self.repetitions,
-            "pilot_pairs": self.pilot_pairs, "scrambles": self.scrambles, "reference": self.reference,
-            "checkpoints": self.checkpoints, "fixed_costs": fixed, "allocations": allocations,
-            "matched_precision": _matched_precision(allocations, fixed, self.repetitions),
-            "wall_seconds": time.perf_counter()-start,
-            "runtime": {"python": platform.python_version(), "system": platform.platform(),
-                        "numpy": np.__version__, "scipy": scipy.__version__, "torch": torch.__version__},
-        }
+        return allocations, fixed, _matched_precision(allocations, fixed, self.repetitions)

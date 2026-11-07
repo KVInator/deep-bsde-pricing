@@ -64,6 +64,14 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True, allow_nan=False)+"\n")
 
 
+def _worker_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+        environment[name] = "1"
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return environment
+
+
 def _peak_rss_mib() -> float:
     """Use the executed image's high-water mark on Linux and rusage on macOS."""
     if platform.system() == "Linux":
@@ -265,10 +273,7 @@ class ArithmeticPilot:
         self.config = ArithmeticPilotConfig() if config is None else config
 
     def _run_worker(self, kind: str, directory: Path, *, limits: dict | None = None) -> None:
-        environment = os.environ.copy()
-        for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
-            environment[name] = "1"
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment = _worker_environment()
         with (directory/f"{kind}.log").open("w") as log:
             command = [sys.executable, "-B", "-m", "bsde_pricing.arithmetic_pilot",
                        "--worker", kind, "--run-dir", str(directory.resolve())]

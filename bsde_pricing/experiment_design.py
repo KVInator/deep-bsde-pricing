@@ -131,5 +131,5 @@ class ExperimentDesign:
                 "worker_wall_cap_hours": len(jobs)*self._data["resources"]["worker_wall_seconds"]/3600,
                 "targets": self._data["targets"], "resources": self._data["resources"],
                 "final_samples_drawn": 0, "training_started": False,
-                "execution_support": "design validation and job enumeration; execution belongs to the later suite",
+                "execution_support": "design validation and job enumeration; use final-suite to execute",
                 "jobs": jobs}
