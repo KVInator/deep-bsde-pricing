@@ -28,7 +28,7 @@ All ten reference cases qualified and all 78 fits finished. One vanilla fit met 
 
 All 48 estimator repetitions completed. At the 0.025 half-width target, both conventional geometric-payoff controls had lower total and per-query costs than the learned controls in all three seed cohorts. At 0.01, both conventional controls qualified in every cohort and every learned variant missed the target. [Locked results](experiments/results.json)
 
-The recorded workers took about 97 minutes on Linux. The ledger also accounts for the workspace interruption before the last cohort finished.
+The locked run took 33 minutes on the Apple silicon Mac and about 97 minutes of worker time in the Linux workspace. Both runs selected the same 78 checkpoints, matched the pricing and risk decisions, and selected the same estimator allocations. The checked-in tables use the Mac report.
 
 ## Locked experiment
 
