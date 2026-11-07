@@ -50,11 +50,11 @@ strike, maturity or correlation change within the ten-asset stress set.
 | High correlation | 10 | As baseline | 100 | 1 | 3% | As baseline | As baseline | 0.80 |
 
 The arithmetic baskets are equally weighted. The geometric case uses
-$s=(90,100,110,95,105)$, $w=(0.10,0.15,0.20,0.25,0.30)$,
-$\sigma=(0.16,0.19,0.23,0.26,0.31)$ and
-$q=(0.005,0.010,0.015,0.020,0.025)$. With loadings
-$\ell=(0.65,0.50,-0.35,0.45,0.55)$, its correlation matrix has
-$\rho_{ii}=1$ and $\rho_{ij}=\ell_i\ell_j$ for $i\ne j$.
+$`s=(90,100,110,95,105)`$, $`w=(0.10,0.15,0.20,0.25,0.30)`$,
+$`\sigma=(0.16,0.19,0.23,0.26,0.31)`$ and
+$`q=(0.005,0.010,0.015,0.020,0.025)`$. With loadings
+$`\ell=(0.65,0.50,-0.35,0.45,0.55)`$, its correlation matrix has
+$`\rho_{ii}=1`$ and $`\rho_{ij}=\ell_i\ell_j`$ for $`i\ne j`$.
 The unequal inputs and mixed signs make the coordinate Greeks and the
 Brownian-to-spot transformation observable in the analytical check.
 
@@ -62,30 +62,33 @@ Brownian-to-spot transformation observable in the analytical check.
 
 ### Risk-neutral dynamics
 
-Let $W$ have independent Brownian components, $LL^\top=\rho$ and
-$\Sigma(s)=\operatorname{diag}(s_i\sigma_i)L$. The drift is $b_i(s)=(r-q_i)s_i$. Rates and yields compound
-continuously, time is in years, and payoff and spot use the same price unit.
+Let $`W`$ have independent Brownian components, $`LL^\top=\rho`$ and
+$`\Sigma(s)=\mathrm{diag}(s_i\sigma_i)L`$. The drift is
+$`b_i(s)=(r-q_i)s_i`$. Rates and yields compound continuously, time is in
+years, and payoff and spot use the same price unit.
 
-$$
-dS_t^i=(r-q_i)S_t^i\,dt+(\Sigma(S_t)dW_t)_i,\qquad
-S_{t+h}^i=S_t^i\exp\!\left[
-(r-q_i-\tfrac12\sigma_i^2)h+\sigma_i(L\Delta W)_i
-\right],\quad \Delta W\sim N(0,hI).
-$$
+```math
+\begin{aligned}
+dS_t^i &= (r-q_i)S_t^i\,dt+(\Sigma(S_t)dW_t)_i, \\
+S_{t+h}^i &= S_t^i\exp\!\left[(r-q_i-\tfrac{1}{2}\sigma_i^2)h+\sigma_i(L\Delta W)_i\right], \\
+\Delta W &\sim \mathcal{N}(0,hI).
+\end{aligned}
+```
 
-The basket is $A(s)=\sum_i w_i s_i$ or $G(s)=\prod_i s_i^{w_i}$.
-For $g(s)=(B(s)-K)^+$ and remaining time $\tau=T-t$,
+The basket is $`A(s)=\sum_i w_i s_i`$ or $`G(s)=\prod_i s_i^{w_i}`$.
+For $`g(s)=(B(s)-K)^+`$ and remaining time $`\tau=T-t`$,
 
-$$
-u(t,s)=e^{-r\tau}\mathbb E^{\mathbb Q}[g(S_T)\mid S_t=s],\qquad
-u_t+b^\top\nabla_s u+
-\tfrac12\operatorname{tr}(\Sigma\Sigma^\top D_s^2u)-ru=0,\qquad
-u(T,s)=g(s).
-$$
+```math
+\begin{aligned}
+u(t,s) &= e^{-r\tau}\mathbb{E}^{\mathbb{Q}}[g(S_T)\mid S_t=s], \\
+0 &= u_t+b^\top\nabla_s u+\tfrac{1}{2}\mathrm{tr}(\Sigma\Sigma^\top D_s^2u)-ru, \\
+u(T,s) &= g(s).
+\end{aligned}
+```
 
 The forward lognormal step is exact. Time discretization enters the
 stochastic integral and the fitted loss. A terminal-payoff reference can
-sample $S_T$ in one step, while a martingale control evaluates intermediate
+sample $`S_T`$ in one step, while a martingale control evaluates intermediate
 states at the left endpoints of the integration grid.
 
 ### Vanilla and geometric benchmarks
@@ -94,32 +97,33 @@ Black–Scholes supplies the vanilla price, delta and gamma. The
 finite-difference comparison solves the same scalar PDE with Crank–Nicolson,
 backward-Euler half steps at startup, and the discounted intrinsic
 asymptote at the upper boundary. At 800 intervals in each dimension,
-the signed errors were $-6.13\times10^{-4}$ in price,
-$-1.35\times10^{-5}$ in delta and $+1.71\times10^{-6}$ in gamma
+the signed errors were $`-6.13\times10^{-4}`$ in price,
+$`-1.35\times10^{-5}`$ in delta and $`+1.71\times10^{-6}`$ in gamma
 at the initial spot. The executed notebook retains the refinement table.
 
-For the geometric basket, set $a_i=w_i\sigma_i$,
-$v=a^\top\rho a$ and $m=\sum_i w_i(r-q_i-\sigma_i^2/2)$.
-The conditional log basket return has mean $m\tau$ and variance $v\tau$.
-The scalar Black–Scholes formula at $G(s)$ uses volatility $\sqrt v$
-and effective yield $r-m-v/2$. Its spot derivatives give the coordinate
-deltas $\Delta_i=C_G w_iG(s)/s_i$.
+For the geometric basket, set $`a_i=w_i\sigma_i`$,
+$`v=a^\top\rho a`$ and $`m=\sum_i w_i(r-q_i-\sigma_i^2/2)`$.
+The conditional log basket return has mean $`m\tau`$ and variance $`v\tau`$.
+The scalar Black–Scholes formula at $`G(s)`$ uses volatility $`\sqrt v`$
+and effective yield $`r-m-v/2`$. Its spot derivatives give the coordinate
+deltas $`\Delta_i=C_G w_iG(s)/s_i`$.
 
 ### Arithmetic-basket price and delta references
 
-Exact GBM transitions give $\partial S_T^i/\partial s_i=S_T^i/s_i$.
+Exact GBM transitions give $`\partial S_T^i/\partial s_i=S_T^i/s_i`$.
 For the nondegenerate calls, the strike event has zero probability.
 The integrable pathwise derivative yields
 
-$$
-\Delta_i=e^{-r\tau}\mathbb E^{\mathbb Q}\!\left[
-\mathbf1_{\{A(S_T)>K\}}w_iS_T^i/s_i\mid S_t=s
+```math
+\Delta_i=e^{-r\tau}\mathbb{E}^{\mathbb{Q}}\!\left[
+\mathbf{1}_{\{A(S_T)>K\}}\,w_i\frac{S_T^i}{s_i}
+\;\middle|\; S_t=s
 \right].
-$$
+```
 
 A geometric payoff and its pathwise delta contributions provide controls
 with known expectations. Separate pilot samples fit the coefficients.
-The primary reference uses 16 randomized Sobol scrambles with $2^{16}$
+The primary reference uses 16 randomized Sobol scrambles with $`2^{16}`$
 terminal states per scramble at the first allocation. A separate estimate
 uses 131,072 antithetic pairs. The standard-error units are independent
 scramble means and independent pair means, respectively.
@@ -133,48 +137,53 @@ and the largest discrepancy was 1.95 combined standard errors.
 
 ## Neural BSDE formulations
 
-Applying Itô's formula to $Y_t=u(t,S_t)$ gives
-$dY_t=rY_t\,dt+Z_t^\top dW_t$ with $Z_t=\Sigma(S_t)^\top\nabla_su(t,S_t)$.
-For $\widetilde Y_t=e^{-rt}Y_t$ and $\widetilde Z_t=e^{-rt}Z_t$,
+Applying Itô's formula to $`Y_t=u(t,S_t)`$ gives
+$`dY_t=rY_t\,dt+Z_t^\top dW_t`$ with $`Z_t=\Sigma(S_t)^\top\nabla_su(t,S_t)`$.
+For $`\widetilde{Y}_t=e^{-rt}Y_t`$ and $`\widetilde{Z}_t=e^{-rt}Z_t`$,
 
-$$
-d\widetilde Y_t=\widetilde Z_t^\top dW_t,\qquad
-\widetilde Y_T=X=e^{-rT}g(S_T).
-$$
+```math
+\begin{aligned}
+d\widetilde{Y}_t &= \widetilde{Z}_t^\top dW_t, \\
+\widetilde{Y}_T &= X=e^{-rT}g(S_T).
+\end{aligned}
+```
 
-The value-gradient solver represents $u_\theta(t,s)$ with one smooth
+The value-gradient solver represents $`u_\theta(t,s)`$ with one smooth
 network. Differentiation in physical spot coordinates supplies the
 discounted control. The locked objective combines the local martingale
 residuals with the terminal residual,
 
-$$
-\frac{1}{K^2}\mathbb E\!\left[
-\sum_{j=0}^{N-1}
-(\widetilde Y_{j+1}-\widetilde Y_j-\widetilde Z_j^\top\Delta W_j)^2
-+(\widetilde Y_N-X)^2
+```math
+\frac{1}{K^2}\mathbb{E}\!\left[
+\begin{aligned}
+&\sum_{j=0}^{N-1}
+(\widetilde{Y}_{j+1}-\widetilde{Y}_j-\widetilde{Z}_j^\top\Delta W_j)^2 \\
+&\quad +(\widetilde{Y}_N-X)^2
+\end{aligned}
 \right].
-$$
+```
 
-The terminal-loss solver learns a free initial value $y$ and initial
+The terminal-loss solver learns a free initial value $`y`$ and initial
 control, with a separate state-only network at each later grid point.
-It minimizes $\mathbb E[(y+\sum_j\widehat Z_j^\top\Delta W_j-X)^2]/K^2$.
+It minimizes $`\mathbb{E}[(y+\sum_j\widehat{Z}_j^\top\Delta W_j-X)^2]/K^2`$.
 For square-integrable predictable controls on exact forward paths,
 martingale representation and Itô isometry give the population identity
 
-$$
-\mathbb E[(y+\sum_j\widehat Z_j^\top\Delta W_j-X)^2]
-=(y-u(0,S_0))^2+
-\sum_j\int_{t_j}^{t_{j+1}}\mathbb E\|\widehat Z_j-\widetilde Z_t\|^2\,dt.
-$$
+```math
+\begin{aligned}
+&\mathbb{E}[(y+\sum_j\widehat{Z}_j^\top\Delta W_j-X)^2] \\
+&\quad=(y-u(0,S_0))^2+\sum_j\int_{t_j}^{t_{j+1}}\mathbb{E}\|\widehat{Z}_j-\widetilde{Z}_t\|^2\,dt.
+\end{aligned}
+```
 
 The first term is initial price error and the second is integrated
 control error. Spot-risk validation is pointwise. For the terminal
 formulation, delta comes from solving
-$\Sigma(s)^\top\Delta=e^{rt}\widehat Z_t$. The inverse diffusion norm
+$`\Sigma(s)^\top\Delta=e^{rt}\widehat{Z}_t`$. The inverse diffusion norm
 governs amplification of control error. The value-gradient formulation
 also permits spot curvature by differentiating the learned value twice.
-The arithmetic call satisfies $0\le\Delta_i\le w_i e^{-q_i\tau}$.
-The geometric upper bound is $e^{-q_{\rm eff}\tau}w_iG/s_i$.
+The arithmetic call satisfies $`0\le\Delta_i\le w_i e^{-q_i\tau}`$.
+The geometric upper bound is $`e^{-q_{\mathrm{eff}}\tau}w_iG/s_i`$.
 The [technical report](docs/report.md#3-bsde-formulations-and-sources-of-error)
 derives the fixed-grid projection and discusses the scope of the
 published convergence bounds.
@@ -193,10 +202,10 @@ separate random streams.
 Each of ten contracts is fitted on a 16-interval grid with two formulations
 and three seeds. The ten-asset base case is also fitted at 10, 20 and 40
 intervals, giving 78 fits in total. The precision gates were locked before
-the final fits. For signed error $e$ and reference half-width $h$ in the
-same units, $|e|+h\le0.01$ is a pass, and $|e|-h>0.01$ is a miss.
+the final fits. For signed error $`e`$ and reference half-width $`h`$ in the
+same units, $`|e|+h\le0.01`$ is a pass, and $`|e|-h>0.01`$ is a miss.
 The remaining overlap is unresolved. A joint pass requires a price
-pass and a pass in every $\Delta_i/w_i$ coordinate.
+pass and a pass in every $`\Delta_i/w_i`$ coordinate.
 
 ### Prices and Greeks across contracts
 
@@ -217,9 +226,9 @@ largest absolute scaled coordinate error over those seeds.
 | arithmetic-10-short | 2.809889 | 0.001875–0.056 | 0.00049–0.01719 | 0.1465 | 0.1548 |
 | arithmetic-10-correlation-80 | 8.683692 | 0.08339–0.207 | 0.0162–0.02751 | 0.2614 | 0.3041 |
 
-The one joint pass had signed price error $-0.002763$ and delta error
-$+0.004032$. The 16-interval terminal-loss ten-asset fit for seed 41003
-had absolute price error about $3.9\times10^{-5}$ and maximum scaled
+The one joint pass had signed price error $`-0.002763`$ and delta error
+$`+0.004032`$. The 16-interval terminal-loss ten-asset fit for seed 41003
+had absolute price error about $`3.9\times10^{-5}`$ and maximum scaled
 delta error 0.1171. The three vanilla value-gradient gamma estimates
 were 0.00200–0.00468 against the analytical 0.01933. These are separate
 price, risk and curvature checks.
@@ -248,17 +257,19 @@ measures their combined effect.
 
 ## Learned controls and matched estimator cost
 
-For a frozen predictable integrand, $I=\sum_j\widehat Z_j^\top\Delta W_j$
-has mean zero. A coefficient $\beta$ fitted on independent pilot paths
-preserves the mean of $X-\beta I$. Its variance is
+For a frozen predictable integrand, $`I=\sum_j\widehat{Z}_j^\top\Delta W_j`$
+has mean zero. A coefficient $`\beta`$ fitted on independent pilot paths
+preserves the mean of $`X-\beta I`$. Its variance is
 
-$$
-\operatorname{Var}(X-\beta I)=\operatorname{Var}(X)
--2\beta\operatorname{Cov}(X,I)+\beta^2\operatorname{Var}(I).
-$$
+```math
+\begin{aligned}
+\mathrm{Var}(X-\beta I) &= \mathrm{Var}(X)-2\beta\mathrm{Cov}(X,I) \\
+&\quad+\beta^2\mathrm{Var}(I).
+\end{aligned}
+```
 
 The optimal scalar for a nondegenerate control is
-$\operatorname{Cov}(X,I)/\operatorname{Var}(I)$. For antithetic sampling,
+$`\mathrm{Cov}(X,I)/\mathrm{Var}(I)`$. For antithetic sampling,
 the calculation uses pair averages. On the exact five-asset geometric
 case, the analytical integrand gave variance reduction of about 11.5×
 at 4 intervals and 165.9× at 64. The integral-mean and discrete
@@ -272,9 +283,9 @@ smallest tested allocation where all 16 observed interval half-widths
 meet the target. The allocations are 8,192, 32,768 and 131,072 terminal
 states. Martingale controls also evaluate the intermediate grid.
 
-$$
-C(q)=C_{\rm train}+C_{\rm load}+C_{\rm pilot}+qC_{\rm eval}.
-$$
+```math
+C(q)=C_{\mathrm{train}}+C_{\mathrm{load}}+C_{\mathrm{pilot}}+qC_{\mathrm{eval}}.
+```
 
 The median costs below are calculated across qualifying cohorts. The
 fixed model and coefficient are reused across independent estimates of
@@ -325,7 +336,7 @@ integral qualified in every cohort, and every learned variant missed.
   the exact value for all three seeds.
 - The equal-weight dimension ladder changes diversification as well as
   input size. At the common initial spot its relative variance is
-  $\sigma^2[\rho+(1-\rho)/d]$. The results describe these equicorrelated
+  $`\sigma^2[\rho+(1-\rho)/d]`$. The results describe these equicorrelated
   synthetic baskets and finite training budgets.
 - The 48 repetitions cover one ten-asset contract with frozen checkpoints.
   Timing and reuse conclusions are conditional on that contract,
