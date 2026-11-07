@@ -2210,3 +2210,37 @@ The findings remain unchanged: terminal loss meets the price target at four of t
 Total local study wall time is 386.9141 seconds. Value-gradient fitting takes 8.6591-11.0969 seconds and terminal fitting 14.7510-18.4580 seconds. Largest training-worker peak is 400.05 MiB, reference peak 123.72 MiB and Greek-diagnostic peak 320.19 MiB; controller peak is separately 233.48 MiB on the 8 GiB MacBook. Training uses CPU float64, Python 3.12.16, NumPy 2.5.4 and PyTorch 2.15.0 on macOS 27.0.1 ARM64. These are workload timings rather than a matched-precision hardware comparison.
 
 The [pushed notebook at 400fbb1](https://github.com/KVInator/deep-bsde-pricing/commit/400fbb1491dc9539fa385763456da3a9082cfdca) changes outputs only. Its source is unchanged, with 43 consecutively executed code cells, 34 complete figures and no saved errors or stderr. Execution counts 81-123 document consecutive execution but do not establish a kernel restart. The three new figures render fully and all ten new tables match the complete local report exactly. Every shared CLI summary field also agrees with that report. Directional standard errors and finite-bump curvature intervals were independently recomputed from the retained scramble estimates. No blocking discrepancy was found. This closes the Greek stress study without additional tuning; known-control martingale-estimator verification is the next separate experiment. Final streams remain reserved.
+
+## Known-control martingale estimator
+
+Let \(X=e^{-rT}g(S_T)\) and write the Brownian control in independent coordinates as \(Z=A^\top\Delta\), with \(A=\operatorname{diag}(S\sigma)L\). The estimator subtracts the discounted left-endpoint sum
+
+\[
+I_N=\sum_{n=0}^{N-1} h_n^\top\Delta B_n,\qquad
+h_n=e^{-rt_n}Z(t_n,S_{t_n}),\qquad
+\widehat V_N=\frac1M\sum_{k=1}^M (X_k-I_{N,k}).
+\]
+
+Each \(h_n\) is measurable at \(t_n\). With square-integrable controls, the conditional mean of \(h_n^\top\Delta B_n\) is zero, so exact terminal GBM preserves the model-price target at any grid resolution. The left-endpoint integrand approximates the continuous martingale representation. Its squared \(L^2\) error determines the remaining estimator variance by Itô isometry.
+
+The implementation builds each spot state from the Brownian prefix and evaluates the control before advancing that prefix. The control receives time and current spots, and returns discounted exposures in independent Brownian coordinates. A two-step hand calculation checks signs and units. Perturbing the final increment leaves every control input unchanged and affects the integral only through its final dot product. The zero-control path returns the discounted payoff directly.
+
+### IID verification
+
+The vanilla and asymmetric five-asset geometric calls have exact prices and deltas. Each case uses 16,384 IID paths with PCG64, seed 2026, and a separate development spawn key \((25,d)\) for dimension \(d\). The 4, 8, 16, 32 and 64 interval grids aggregate a common finest Brownian draw. Every estimate in a case uses exactly the same terminal payoff. The zero and analytical controls have unit coefficients fixed before sampling. The locked final estimator streams remain reserved.
+
+For \(Q_N=\sum_n\|h_n\|^2\Delta t\), the observed isometry gap is the sample mean of \(I_N^2-Q_N\). Its standard error uses the paired difference on each IID path. Prices use pointwise normal 95% intervals, with the sample standard deviation of the actual estimator divided by \(\sqrt M\). The shared paths induce dependence across grid rows.
+
+| Case | Exact price | Zero-control SE | Analytical SE at 64 intervals | Sample variance reduction |
+| --- | ---: | ---: | ---: | ---: |
+| Vanilla | 9.41340338 | 0.10965088 | 0.00799969 | 187.88× |
+| Geometric five | 5.49471932 | 0.06748285 | 0.00524005 | 165.85× |
+
+The sample variance factors rise from 12.81× to 187.88× for vanilla and from 11.46× to 165.85× for geometric five over the declared grids. The largest absolute integral-mean gap is 0.99 standard errors and the largest absolute isometry gap is 1.16 standard errors. The geometric estimate at eight intervals lies 2.06 standard errors above its reference, just beyond the pointwise 95% interval. The other eleven price intervals cover their references. These are equal-path comparisons. Intermediate states and deltas add computation, so matched-precision cost belongs to the later comparison.
+
+```bash
+python -m bsde_pricing martingale-control --case vanilla --output scratch/runs/martingale_vanilla.json
+python -m bsde_pricing martingale-control --case geometric-five --output scratch/runs/martingale_geometric_five.json
+```
+
+The reports retain the grid estimates, sample variances, standard errors, control means, isometry gaps, seed lineage and runtime. [Control variates](../notebooks/04_control_variates.ipynb) reads the two reports and displays all rows. The results above use Linux x86-64, Python 3.12.14, NumPy 2.3.5 and SciPy 1.17.0.

@@ -204,6 +204,13 @@ def main() -> None:
     bsde_diagnostic.add_argument("--paths", type=int, default=8192)
     bsde_diagnostic.add_argument("--seed", type=int, default=2026)
     bsde_diagnostic.add_argument("--steps", type=int, nargs="+", default=(8, 16, 32, 64, 128, 256))
+    martingale = commands.add_parser(
+        "martingale-control", help="verify zero and analytical martingale controls on IID paths",
+    )
+    martingale.add_argument("--case", choices=("vanilla", "geometric-five"), default="geometric-five")
+    martingale.add_argument("--paths", type=int, default=16_384)
+    martingale.add_argument("--seed", type=int, default=2026)
+    martingale.add_argument("--steps", type=int, nargs="+", default=(4, 8, 16, 32, 64))
     autograd = commands.add_parser("autograd", help="check physical derivatives and CPU/MPS workloads")
     autograd.add_argument("--backend", choices=("auto", "cpu", "mps"), default="auto")
     autograd.add_argument("--batch-size", type=int, default=256)
@@ -252,7 +259,7 @@ def main() -> None:
     stress_study.add_argument("--geometric-value", type=Path, default=Path("scratch/runs/geometric_five_fbsnn"))
     stress_study.add_argument("--geometric-terminal", type=Path, default=Path("scratch/runs/geometric_five_terminal_bsde"))
     for command in (environment, describe, reference, monte_carlo, finite_difference, sample,
-                    basket_reference, bsde_diagnostic, autograd, bsde_loss, design):
+                    basket_reference, bsde_diagnostic, martingale, autograd, bsde_loss, design):
         command.add_argument(
             "--output", type=Path, help="save a JSON report, normally under scratch/"
         )
@@ -415,6 +422,13 @@ def main() -> None:
                     summary = _basket_reference_summary(args, case)
                 elif args.command == "bsde-diagnostic":
                     summary = _bsde_diagnostic_summary(args, case)
+                elif args.command == "martingale-control":
+                    from .martingale import run_known_control_study
+
+                    summary = run_known_control_study(
+                        case, n_paths=args.paths, seed=args.seed, steps=tuple(args.steps),
+                    )
+                    summary["problem"] = json.loads(case.to_json())
                 elif args.command == "bsde-loss":
                     from .loss_diagnostics import run_loss_diagnostics
 

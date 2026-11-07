@@ -127,6 +127,15 @@ The four declared arithmetic-ten stresses use strikes 90 and 110, maturity 0.25 
 
 Outputs are protected under `scratch/runs/greek_stress_study`; notebook sections 38-41 read this report. Arithmetic curvature intervals describe finite-bump sampling uncertainty and exclude bump bias. Terminal initial-price curvature remains unavailable. The [Greek stress methodology](docs/methodology.md#greek-reliability-under-financial-stresses) defines the directions, references and limitations.
 
+## Known martingale controls
+
+```bash
+python -m bsde_pricing martingale-control --case vanilla --output scratch/runs/martingale_vanilla.json
+python -m bsde_pricing martingale-control --case geometric-five --output scratch/runs/martingale_geometric_five.json
+```
+
+Both calls compare ordinary IID payoff Monte Carlo with the analytical Brownian control on shared paths and nested time grids. The reports include price uncertainty, sample variance reduction and an Itô-isometry check. [Control variates](notebooks/04_control_variates.ipynb) displays the saved results. See the [estimator derivation and verification](docs/methodology.md#known-control-martingale-estimator).
+
 ## Experiment design
 
 ```bash
