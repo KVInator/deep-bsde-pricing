@@ -358,13 +358,11 @@ integral qualified in every cohort, and every learned variant missed.
 
 ## Run the project
 
-From the repository root, create the pinned environment and run the
-numerical and regression tests.
+From the repository root, create and activate the pinned environment.
 
 ~~~sh
 conda env create -f environment.yml
 conda activate bsde-pricing
-python -m unittest discover -s tests
 ~~~
 
 [The executed notebook](notebooks/deep_bsde_study.ipynb) reads the retained
@@ -389,7 +387,6 @@ and the raw Mac ledger hash.
 | [bsde_pricing/](bsde_pricing/) | Pricing, simulation, BSDE solvers, locked design and runner |
 | [docs/](docs/) | Derivations, retained results and figure |
 | [notebooks/](notebooks/) | Executed study using the package and retained results |
-| [tests/](tests/) | Numerical identities, input contracts, checkpointing and suite behavior |
 
 ## References
 
